@@ -1,3 +1,4 @@
+import { ProjectInvocationAdapter, runProjectInvocationEffect } from './project-invocation'
 import { isNativeCodingAgent, isGlobalOnlyCodingAgent } from '../../contracts/agents/native-coding-agents'
 import { hermesStudioMcpCapabilities } from '../chat-run/studio-mcp'
 import { studioMcpUsageGuidelines } from '../../public/runs/prompt'
@@ -244,6 +245,7 @@ export interface GroupAgentEventSink {
 }
 
 export interface GroupAgentExecutor {
+    readonly projectInvocationBoundary?: true
     readonly agentId: string
     readonly agent: 'hermes' | 'ekko' | 'codex' | 'claude' | 'pi' | 'grok' | 'opencode' | 'dsh' | 'cursor' | 'antigravity' | 'qwen' | 'kimi' | 'codebuddy' | 'qoder' | 'copilot' | 'zcode'
     readonly agentMode: 'scoped' | 'global'
@@ -287,6 +289,7 @@ export interface MentionDeliveryResult {
 type MentionQueueError = {
     message: string
     outcomeUnknown: boolean
+    failedCount?: number
 }
 
 export interface GroupChatRunService {
@@ -352,6 +355,7 @@ export interface GroupChatRunService {
 // ─── Agent Client (single connection) ─────────────────────────
 
 export class AgentClient implements GroupAgentExecutor {
+    readonly projectInvocationBoundary = true as const
     readonly agentId: string
     readonly agent: 'hermes' | 'ekko' | 'codex' | 'claude' | 'pi' | 'grok' | 'opencode' | 'dsh' | 'cursor' | 'antigravity' | 'qwen' | 'kimi' | 'codebuddy' | 'qoder' | 'copilot' | 'zcode'
     readonly agentMode: 'scoped' | 'global'
@@ -1224,7 +1228,7 @@ export class AgentClient implements GroupAgentExecutor {
             const usesGlobalCodingAgent = this.agentMode === 'global' && codingAgentId !== 'ekko-agent'
             const groupSystemPrompt = this.groupSystemPrompt(roomId, msg)
             const executionUser = groupRunUser(this.storage, roomId, this.profile, msg)
-            const result = await this.chatRunService.runAndWait({
+            const result = await runProjectInvocationEffect({ roomId, messageId: msg.messageId || null, agentId: this.agentId }, () => this.chatRunService!.runAndWait({
                 input: this.groupRuntimeInput(msg, runtimeContext),
                 session_id: sessionId,
                 ...(this.model ? { model: this.model } : {}),
@@ -1339,7 +1343,7 @@ export class AgentClient implements GroupAgentExecutor {
                         this.emitClarifyResolved(roomId, { ...payload, agentSessionId: sessionId })
                     }
                 },
-            })
+            }))
             // Internal cancellation settles runAndWait without forwarding its abort usage payload.
             if (!runUsageReceived && result.run_id && this.roomSessionIsCurrent(roomId, sessionId)) {
                 queueToolEventWrite(async () => {
@@ -1528,7 +1532,7 @@ export class AgentClient implements GroupAgentExecutor {
             const flushedAssistantParts = new Set<string>()
             let lastChunk: GroupPrimaryAgentBridgeOutput | null = null
             const roomWorkspace = String(this.storage?.getRoom?.(roomId)?.workspace || '').trim()
-            const started = await bridge.chat(
+            const started = await runProjectInvocationEffect<{ run_id: string }>({ roomId, messageId: msg.messageId || null, agentId: this.agentId }, () => bridge.chat(
                 sessionId,
                 bridgeInput,
                 conversationHistory,
@@ -1543,7 +1547,7 @@ export class AgentClient implements GroupAgentExecutor {
                     // Used only if this operation creates the cached AgentSession.
                     background_delegation_enabled: this.backgroundDelegationEnabled,
                 },
-            )
+            ))
             bridgeStarted = true
             bridgeRunId = started.run_id
             if (!this.replySessionIsCurrent(roomId, sessionId, replyInterruptVersion)) {
@@ -2255,6 +2259,8 @@ function extractBridgeFinalText(chunk: GroupPrimaryAgentBridgeOutput | null): st
 // ─── AgentClients (roomId -> agents) ──────────────────────────
 
 export class AgentClients {
+    constructor(private readonly projectInvocation?: ProjectInvocationAdapter) {}
+
     private rooms = new Map<string, Map<string, GroupAgentExecutor>>()
     private _storage: any = null
     private _workspaceDiffBroadcaster: WorkspaceDiffBroadcaster | null = null
@@ -2556,7 +2562,10 @@ export class AgentClients {
         if (targets.some(target => target.queueId)) {
             this._executionQueueBroadcaster?.(roomId)
         }
-        return Promise.all(completions).then(errors => errors.find(Boolean) || null)
+        return Promise.all(completions).then(errors => {
+            const failure = errors.find(Boolean)
+            return failure ? { ...failure, failedCount: errors.filter(Boolean).length } : null
+        })
     }
 
     retractQueuedMention(
@@ -2771,6 +2780,15 @@ export class AgentClients {
         }
         const completed = this.queueMention(roomId, mentioned, msg)
         await this._drainRoomQueues(roomId)
+        if (this.projectInvocation && !msg.continuationAttemptId) {
+            const queueError = await completed
+            if (queueError) return {
+                targetCount: mentioned.length,
+                deliveredCount: Math.max(0, mentioned.length - (queueError.failedCount || 1)),
+                errors: [queueError.message],
+                outcomeUnknown: queueError.outcomeUnknown,
+            }
+        }
         if (msg.continuationAttemptId && mentioned.length === 1) {
             const queueError = await completed
             if (queueError) {
@@ -2902,7 +2920,17 @@ export class AgentClients {
                         const targetMessage = targetOwnerMemberId
                             ? { ...next.msg, targetOwnerMemberId }
                             : next.msg
-                        await agent.replyToMention(roomId, targetMessage, runtimeContext, onStatus)
+                        const invoke = () => agent.replyToMention(roomId, targetMessage, runtimeContext, onStatus)
+                        if (this.projectInvocation) {
+                            await this.projectInvocation.run({
+                                roomId,
+                                messageId: next.msg.messageId || null,
+                                agentId: agent.agentId,
+                                queueId: runnableTarget.queueId,
+                            }, invoke, agent.projectInvocationBoundary === true)
+                        } else {
+                            await invoke()
+                        }
                     })]) : []
                     for (let index = 0; index < results.length; index += 1) {
                         const result = results[index]
