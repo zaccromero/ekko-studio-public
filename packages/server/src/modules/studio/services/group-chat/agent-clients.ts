@@ -1702,7 +1702,10 @@ export class AgentClient implements GroupAgentExecutor {
 
             this.emitMessageStreamStart(roomId, streamMessageId, sessionId, runMessageId)
             streamStarted = true
-            for await (const chunk of bridge.streamOutput(started.run_id, { timeoutMs: 120000 })) {
+            // A Group Chat Hermes turn may queue behind the other @allone workers.
+            // This extends only the read of the already-started run; it never
+            // starts or retries another invocation after a slow first response.
+            for await (const chunk of bridge.streamOutput(started.run_id, { timeoutMs: 300000 })) {
                 if (!this.replySessionIsCurrent(roomId, sessionId, replyInterruptVersion)) {
                     await stopStaleStartedRun?.()
                     return
