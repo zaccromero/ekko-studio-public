@@ -1,4 +1,5 @@
-import { delimiter } from 'path'
+import { delimiter, join } from 'path'
+import { homedir } from 'os'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const execState = vi.hoisted(() => {
@@ -71,6 +72,25 @@ afterEach(() => {
   if (typeof originalHermesDesktop === 'undefined') delete process.env.HERMES_DESKTOP
   else process.env.HERMES_DESKTOP = originalHermesDesktop
   vi.resetModules()
+})
+
+describe('coding agent server PATH detection', () => {
+  it('finds a user-local Claude CLI without desktop mode or a login-shell PATH', async () => {
+    delete process.env.HERMES_DESKTOP
+    const { getCodingAgentStatus } = await import('../../packages/server/src/bootstrap/coding-agents')
+    const status = await getCodingAgentStatus({
+      id: 'claude-code',
+      name: 'Claude Code',
+      provider: 'Anthropic',
+      command: 'claude',
+      packageName: '@anthropic-ai/claude-code',
+    })
+
+    expect(status.installed).toBe(true)
+    const versionCall = execState.calls.find(call => call.command === 'claude' && call.args[0] === '--version')
+    expect(versionCall?.options.env.PATH.split(delimiter)).toContain(join(homedir(), '.local', 'bin'))
+    expect(execState.calls.some(call => call.command === '/bin/zsh')).toBe(false)
+  }, 10_000)
 })
 
 describe('coding agent desktop PATH detection', () => {

@@ -748,7 +748,7 @@ for (const endpoint of ['/api/hermes/profiles', '/api/hermes/available-models', 
       await addDrawer.getByRole('button', { name: 'Cancel', exact: true }).click()
       await expect(addDrawer).toBeHidden()
 
-      await page.getByRole('button', { name: 'Worker', exact: true }).click()
+      await page.getByRole('button', { name: /^Worker\. Agent:/ }).click()
       const editDrawer = page.locator('.n-drawer').filter({ hasText: 'Edit Worker' })
       await expect(editDrawer).toBeVisible({ timeout: 1000 })
       await expect(editDrawer.locator('.agent-form-loading')).toBeVisible()
@@ -1422,12 +1422,16 @@ test.describe('group chat room deep links', () => {
       const trigger = page.getByRole('button', { name: 'Worker' })
       await expect(trigger).toBeVisible()
       await expect(trigger).toHaveCSS('-webkit-app-region', 'no-drag')
+      await trigger.hover()
+      await expect(page.locator('.agent-connection-details')).toContainText('Agent: hermes · Ekko server · Room link status unknown · Profile: default · Configured model: test-provider / test-model')
       await trigger.click()
 
       const modal = page.locator('.n-drawer').filter({ hasText: 'Edit Worker' })
       await expect(modal).toBeVisible()
       await expect(modal.getByText('Avatar', { exact: true })).toBeVisible()
       await expect(modal.getByText('Agent Name', { exact: true })).toBeVisible()
+      await expect(modal.locator('.agent-connection-summary')).toContainText('Connection in this room')
+      await expect(modal.locator('.agent-connection-summary')).toContainText('Configured model: test-provider / test-model')
     })
   }
 
@@ -1522,7 +1526,7 @@ test.describe('group chat room deep links', () => {
     expect(api.addedAgents[0]).toMatchObject({ roomId: 'room-alpha', body: {
       agent: 'dsh', agentMode: 'scoped', agentPreset: 'minimal', provider: 'test-provider', model: 'test-model', name: 'DSH Worker',
     } })
-    await page.getByRole('button', { name: 'DSH Worker', exact: true }).click()
+    await page.getByRole('button', { name: /^DSH Worker\. Agent:/ }).click()
     await expect(page.locator('.n-drawer').filter({ hasText: 'Edit DSH Worker' }).getByTestId('dsh-session-preset')).toContainText('Minimal mode')
   })
 
@@ -2152,7 +2156,7 @@ for (const mobile of [false, true]) test(`group-chat ${mobile ? 'mobile' : 'desk
   await expect.poll(() => api.addedAgents.length).toBe(1)
   expect(api.addedAgents[0].body).toMatchObject({ agent: 'codex', agentMode: 'global', provider: '', model: 'native-review', reasoningEffort: 'high' })
   expect(api.addedAgents[0].body.apiMode).toBeUndefined()
-  await page.getByRole('button', { name: 'Native Reviewer', exact: true }).click()
+  await page.getByRole('button', { name: /^Native Reviewer\. Agent:/ }).click()
   const edit = page.locator('.n-drawer').filter({ hasText: 'Edit Native Reviewer' })
   await expect(edit.locator('.native-model-trigger')).toHaveText('Native Review')
   await expect(edit.locator('.native-reasoning-effort')).toContainText('High')

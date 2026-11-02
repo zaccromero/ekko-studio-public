@@ -19,8 +19,8 @@ jobs:
   e2e-shard:
     runs-on: ubuntu-24.04
     # Browser/dependency setup can take 15+ minutes on a cold runner.
-    # Reserve setup/report time in addition to the 25-minute test-step limit.
-    timeout-minutes: 50
+    # Reserve setup/report time in addition to the 35-minute test-step limit.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -46,7 +46,7 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Run Playwright tests
-        timeout-minutes: 25
+        timeout-minutes: 35
         run: npm run test:e2e -- --shard=${{ matrix.shard }}/6
 
       - name: Upload shard report

@@ -105,8 +105,15 @@ describe('client TTS unified synthesize flow', () => {
         signal: controller.signal,
       },
     )
-    expect(result.audio).toBeInstanceOf(Blob)
-    expect(result.audio.size).toBeGreaterThan(0)
+    expect(result.audio.type).toBe('audio/mpeg')
+    expect(result.audio.size).toBe(11)
+    const audioText = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result))
+      reader.onerror = () => reject(reader.error)
+      reader.readAsText(result.audio)
+    })
+    expect(audioText).toBe('audio-bytes')
     expect(result.engine).toBe('openai-engine')
     expect(result.provider).toBe('openai')
   })

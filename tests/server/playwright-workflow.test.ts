@@ -19,12 +19,12 @@ describe('Playwright shard budget', () => {
   it('reserves cold-runner setup time, allows graceful test timeout, and requires blob reports', () => {
     const job = workflow.jobs['e2e-shard']
     const testStep = job.steps.find((step: any) => step.name === 'Run Playwright tests')
-    expect(job['timeout-minutes']).toBe(50)
-    expect(testStep['timeout-minutes']).toBe(25)
+    expect(job['timeout-minutes']).toBe(60)
+    expect(testStep['timeout-minutes']).toBe(35)
     // Keep cold-runner setup and artifact upload outside the test-step budget.
     expect(job['timeout-minutes'] - testStep['timeout-minutes']).toBeGreaterThanOrEqual(20)
     const config = readFileSync(resolve('playwright.config.ts'), 'utf8')
-    expect(config).toContain('globalTimeout: process.env.CI ? 23 * 60 * 1000 : undefined')
+    expect(config).toContain('globalTimeout: process.env.CI ? 33 * 60 * 1000 : undefined')
     const report = job.steps.find((step: any) => step.name === 'Upload shard report')
     expect(report.with['if-no-files-found']).toBe('error')
     expect(report.if).toBe('${{ !cancelled() }}')

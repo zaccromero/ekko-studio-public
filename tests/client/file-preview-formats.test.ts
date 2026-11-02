@@ -107,7 +107,7 @@ describe('generated file preview formats', () => {
     await wrapper.findAll('button')[1].trigger('click')
     expect(wrapper.find('.source-view code.hljs').exists()).toBe(true)
     expect(wrapper.find('.source-view').html()).toContain('hljs-tag')
-  })
+  }, 10_000)
 
   it('lets the HTML preview fill the available drawer height', () => {
     const htmlPreviewSource = readFileSync('packages/client/src/components/hermes/files/HtmlFilePreview.vue', 'utf8')

@@ -595,6 +595,25 @@ function agentActivityLabel(agent: RoomAgent): string {
         : t('groupChat.agentReplying')
 }
 
+function agentConnectionDetails(agent: RoomAgent): string[] {
+    const route = agent.executorType === 'remote'
+        ? t('groupChat.agentConnectionRemote', { origin: agent.remoteOrigin || t('groupChat.agentConnectionUnknown') })
+        : t('groupChat.agentConnectionServer')
+    const status = agent.connectionStatus === 'online'
+        ? t('groupChat.agentConnectionOnline')
+        : agent.connectionStatus === 'offline'
+            ? t('groupChat.agentConnectionOffline')
+            : t('groupChat.agentConnectionUnknown')
+    const model = agent.model ? [agent.provider, agent.model].filter(Boolean).join(' / ') : ''
+    return [
+        t('groupChat.agentConnectionAgent', { agent: agent.agent }),
+        route,
+        status,
+        agent.profile && t('groupChat.agentConnectionProfile', { profile: agent.profile }),
+        model ? t('groupChat.agentConnectionModel', { model }) : t('groupChat.agentConnectionDefaultModel'),
+    ].filter(Boolean) as string[]
+}
+
 function canStopAgent(agent: RoomAgent): boolean {
     return currentRoomCanManage.value
         || (
@@ -2415,7 +2434,8 @@ function handleClarifyKeydown(event: KeyboardEvent) {
                                         'agent-avatar-rail-active': !!agentContextStatus(agent),
                                         'agent-avatar-rail-offline': agent.connectionStatus === 'offline',
                                     }"
-                                    :aria-label="agent.name"
+                                    :aria-label="currentRoomCanManage ? `${agent.name}. ${agentConnectionDetails(agent).join('. ')}` : agent.name"
+                                    :title="currentRoomCanManage ? agentConnectionDetails(agent).join(' · ') : agent.name"
                                     :aria-busy="!!agentContextStatus(agent)"
                                     @click="handleAgentRailClick(agent)"
                                 >
@@ -2440,6 +2460,7 @@ function handleClarifyKeydown(event: KeyboardEvent) {
                                         {{ agentActivityLabel(agent) }}
                                     </template>
                                 </span>
+                                <span v-if="currentRoomCanManage" class="agent-connection-details">{{ agentConnectionDetails(agent).join(' · ') }}</span>
                                 <button
                                     v-if="canStopAgent(agent) && agentContextStatus(agent)"
                                     type="button"
@@ -2833,6 +2854,10 @@ function handleClarifyKeydown(event: KeyboardEvent) {
                             {{ t('groupChat.manageAgentPresets') }}
                         </NButton>
                         <p class="form-hint">{{ t('groupChat.agentPresetSnapshotHint') }}</p>
+                    </div>
+                    <div v-if="editingAgent" class="agent-connection-summary">
+                        <strong>{{ t('groupChat.agentConnectionTitle') }}</strong>
+                        <span v-for="detail in agentConnectionDetails(editingAgent)" :key="detail">{{ detail }}</span>
                     </div>
                     <div class="group-agent-avatar-editor">
                         <ProfileAvatar
@@ -4153,7 +4178,24 @@ export default defineComponent({ components: { CreateRoomForm } })
     display: flex;
     align-items: center;
     gap: calc(10px * var(--spacing-scale, 1));
-    max-width: 280px;
+    max-width: 360px;
+    flex-wrap: wrap;
+}
+
+.agent-connection-details {
+    flex-basis: 100%;
+    color: $text-secondary;
+    font-size: calc(var(--font-size-base, 14px) * 11 / 14);
+    overflow-wrap: anywhere;
+}
+
+.agent-connection-summary {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 16px;
+    color: $text-secondary;
+    overflow-wrap: anywhere;
 }
 
 .agent-avatar-activity-text {

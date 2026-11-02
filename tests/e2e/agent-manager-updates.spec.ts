@@ -7,7 +7,10 @@ test('keeps Runtime management readable at the shared desktop and mobile drawer 
   await page.route('**/api/agents/status', route => route.fulfill({ json: {
     revision: 1,
     updatedAt: '2026-10-01T00:00:00.000Z',
-    agents: [{ id: 'hermes', installed: true, source: 'managed-runtime', version: '0.21.0', path: '/runtime/hermes' }],
+    agents: [
+      { id: 'hermes', installed: true, source: 'managed-runtime', version: '0.21.0', path: '/runtime/hermes' },
+      ...['claude-code', 'codex', 'cursor'].map(id => ({ id, installed: true, source: 'user-cli', version: '1.2.3', path: `/usr/local/bin/${id}` })),
+    ],
   } }))
   const directory = '/Users/studio/Library/Application Support/Ekko Studio/runtimes/hermes/0.21.0/linux-x64'
   await page.route('**/api/hermes/runtime-versions', route => route.fulfill({ json: {
@@ -27,6 +30,10 @@ test('keeps Runtime management readable at the shared desktop and mobile drawer 
   } }))
   await page.setViewportSize({ width: 1280, height: 900 })
   await page.goto('/#/studio/agents')
+  await expect(page.getByTestId('agent-card-hermes').locator('.agent-connection-facts')).toContainText('Studio managed runtime')
+  for (const id of ['claude-code', 'codex', 'cursor']) {
+    await expect(page.getByTestId(`agent-card-${id}`).locator('.agent-connection-facts')).toContainText('User installed CLI')
+  }
   await page.getByRole('button', { name: 'Manage Runtime', exact: true }).click()
   const drawer = page.locator('.n-drawer').filter({ has: page.locator('.version-management') })
   await expect(drawer.getByText('0.21.1', { exact: true })).toBeVisible()

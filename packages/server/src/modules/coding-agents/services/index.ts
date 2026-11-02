@@ -2513,6 +2513,7 @@ async function commandEnv(): Promise<NodeJS.ProcessEnv> {
   const loginShellPath = await getLoginShellPath()
   prependPathEntries(env, [
     npmBin,
+    join(homedir(), '.local', 'bin'),
     ...(loginShellPath ? loginShellPath.split(':') : []),
     ...getDesktopCommonBinPaths(),
   ])

@@ -175,6 +175,17 @@ function toolStatus(id: CodingAgentId): CodingAgentToolStatus | undefined {
   return tools.value.find(tool => tool.id === id)
 }
 
+function connectionSource(id: CodingAgentId | 'hermes'): string {
+  const status = agentStatusSnapshot.value?.agents.find(agent => agent.id === id)
+  if (!status) return t('agentManager.connectionUnknown')
+  if (!status.installed) return t('agentManager.connectionNotInstalled')
+  return status.source === 'managed-runtime'
+    ? t('agentManager.connectionManaged')
+    : status.source === 'user-cli'
+      ? t('agentManager.connectionUserCli')
+      : t('agentManager.connectionUnknown')
+}
+
 function formatVersion(value?: string): string {
   const version = value?.trim()
   if (!version) return t('agentManager.unknownVersion')
@@ -572,6 +583,12 @@ onUnmounted(() => {
               </div>
             </header>
 
+            <div class="agent-connection-facts">
+              <strong>{{ t('agentManager.connectionHeading') }}</strong>
+              <span>{{ t('agentManager.connectionHost') }} · {{ connectionSource('hermes') }}</span>
+              <span>{{ t('agentManager.connectionAccountUnverified') }}</span>
+            </div>
+
             <div class="agent-actions">
               <NButton
                 v-if="hermesDetected"
@@ -631,6 +648,12 @@ onUnmounted(() => {
                   </div>
                 </div>
               </header>
+
+              <div v-if="agent.id === 'claude-code' || agent.id === 'codex' || agent.id === 'cursor'" class="agent-connection-facts">
+                <strong>{{ t('agentManager.connectionHeading') }}</strong>
+                <span>{{ t('agentManager.connectionHost') }} · {{ connectionSource(agent.id) }}</span>
+                <span>{{ t('agentManager.connectionAccountUnverified') }}</span>
+              </div>
 
               <div class="agent-actions">
                 <NButton
@@ -963,6 +986,15 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: calc(15px * var(--spacing-scale, 1));
+}
+
+.agent-connection-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: $text-secondary;
+  font-size: calc(var(--font-size-base, 14px) * 12 / 14);
+  overflow-wrap: anywhere;
 }
 
 .agent-actions {

@@ -25,8 +25,10 @@ export function packNpmReleases(rootDir, outputDir, npmCli = process.env.npm_exe
         cpSync(join(rootDir, path), join(staging, path), { recursive: true })
       }
       writeFileSync(join(staging, 'package.json'), `${JSON.stringify({ ...pkg, name }, null, 2)}\n`)
-      const [packed] = JSON.parse(execFileSync(process.execPath, [npmCli, 'pack', '--ignore-scripts', '--json',
+      const packResult = JSON.parse(execFileSync(process.execPath, [npmCli, 'pack', '--ignore-scripts', '--json',
         '--pack-destination', resolve(outputDir)], { cwd: staging, encoding: 'utf8' }))
+      const packed = Array.isArray(packResult) ? packResult[0] : packResult[name]
+      if (!packed) throw new Error(`Missing npm pack result for ${name}`)
       const files = new Set(packed.files.map(file => file.path))
       for (const file of required) {
         if (!files.has(file)) throw new Error(`Missing ${name} package file: ${file}`)

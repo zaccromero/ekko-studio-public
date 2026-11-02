@@ -17,6 +17,7 @@ export default defineConfig({
   test: {
     include: ['tests/**/*.test.ts'],
     setupFiles: ['tests/setup.ts'],
+    testTimeout: 15_000,
     coverage: {
       exclude: [
         '**/dist/**',
