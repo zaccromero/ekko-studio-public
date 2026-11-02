@@ -24,6 +24,7 @@ export interface RoomInfo {
     guestAgentApproval?: 'owner'
     maxGuestAgentsPerMember?: number
     allowRemoteWorkspaceAccess?: number
+    defaultAgentId?: string
     agentHandoffEnabled?: number
     agentHandoffMaxDepth?: number | null
     agentHandoffUnlimited?: number
@@ -59,6 +60,7 @@ export interface RoomSummaryConfig {
 
 export interface RoomConfigInput extends Partial<RoomSummaryConfig> {
     name?: string
+    defaultAgentId?: string
     agentHandoffEnabled?: boolean
     agentHandoffMaxDepth?: number | null
     agentHandoffUnlimited?: boolean
@@ -131,6 +133,7 @@ export type RoomAgentSummary = Pick<
 export interface GroupMessageRoutingDecision {
     messageId: string; roomId: string; targetAgentId: string | null; targetAgentName: string | null
     mode: 'suggest' | 'auto'; status: 'suggested' | 'queued' | 'skipped'; queueId: string | null
+    defaultUnavailable?: boolean
     confidence: number | null; handoffComplete: boolean | null; loopDetected: boolean | null; createdAt: number; updatedAt: number
 }
 

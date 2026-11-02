@@ -1097,9 +1097,10 @@ export function updateSessionStats(id: string): void {
   db.prepare(
     `UPDATE ${SESSIONS_TABLE}
      SET message_count = (SELECT COUNT(*) FROM ${MESSAGES_TABLE} WHERE session_id = ?),
+         tool_call_count = (SELECT COALESCE(SUM(CASE WHEN json_valid(tool_calls) THEN json_array_length(tool_calls) ELSE 0 END), 0) FROM ${MESSAGES_TABLE} WHERE session_id = ?),
          last_active = COALESCE((SELECT MAX(timestamp) FROM ${MESSAGES_TABLE} WHERE session_id = ?), started_at)
      WHERE id = ?`,
-  ).run(id, id, id)
+  ).run(id, id, id, id)
   console.log(`Updated session ${id} stats`)
 }
 

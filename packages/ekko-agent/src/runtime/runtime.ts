@@ -1807,9 +1807,12 @@ async function createDirectoryChangeProbe(directory: string): Promise<DirectoryC
       // watcher before deciding whether validation is necessary.
       await new Promise<void>(resolveStop => setImmediate(resolveStop))
       watcher.close()
-      if (changed) return true
       const after = await localSkillValidationSignature(directory)
-      return before !== undefined && after !== undefined && before !== after
+      // Watchers can deliver delayed or coalesced events for unchanged files.
+      // Prefer confirmed metadata changes; retain the event fallback only when
+      // a signature could not be read.
+      if (before !== undefined && after !== undefined) return before !== after
+      return changed
     },
   }
 }

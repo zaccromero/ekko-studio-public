@@ -30,6 +30,8 @@ import { startOutboundRelayClient, stopOutboundRelayClient } from '../public/glo
 import { getLanEndpointKind } from '../services/network/lan-discovery'
 import { getPublicSystemInfo } from '../public/system-info'
 import { config } from '../public/config'
+import { isLocalAutoLoginEnabled, isTrustedLocalBrowserRequest } from '../services/auth/local-auto-login'
+import { randomBytes } from 'crypto'
 
 /**
  * GET /api/auth/status
@@ -235,6 +237,54 @@ export async function login(ctx: Context) {
     userId: result.user.id,
     profiles: accessibleProfileNames(result.user),
     theme: toUserThemePayload(getUserTheme(result.user.id)),
+  }
+}
+
+/**
+ * POST /api/auth/local-auto-login
+ * Opt-in (EKKO_LOCAL_AUTO_LOGIN=1) password-free session for a same-origin
+ * browser on this machine. See services/auth/local-auto-login.ts for why each
+ * check exists. Every refusal is an identical 404 so the route is not an oracle.
+ */
+export async function localAutoLogin(ctx: Context) {
+  const trusted = isLocalAutoLoginEnabled() && isTrustedLocalBrowserRequest({
+    remoteAddress: ctx.req.socket.remoteAddress,
+    host: ctx.get('host'),
+    origin: ctx.get('origin'),
+    secFetchSite: ctx.get('sec-fetch-site'),
+    port: config.port,
+  })
+  if (!trusted) {
+    ctx.status = 404
+    ctx.body = { error: 'Not found' }
+    return
+  }
+
+  let user: UserRecord | null = null
+  const admin = listUsers().find(candidate => candidate.role === 'super_admin' && candidate.status === 'active')
+  if (admin) {
+    user = findUserById(admin.id)
+  } else if (countUsers() === 0) {
+    // Fresh install: create the owner with an unguessable password instead of
+    // the well-known default, so the password form cannot be used to claim it.
+    user = createUser({
+      username: DEFAULT_USERNAME,
+      password: randomBytes(24).toString('base64url'),
+      role: 'super_admin',
+    })
+  }
+  if (!user) {
+    ctx.status = 404
+    ctx.body = { error: 'Not found' }
+    return
+  }
+
+  const token = await issueUserJwt(user)
+  ctx.body = {
+    token,
+    userId: user.id,
+    profiles: accessibleProfileNames(user),
+    theme: toUserThemePayload(getUserTheme(user.id)),
   }
 }
 

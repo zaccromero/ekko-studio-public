@@ -158,3 +158,54 @@ describe('coding-agent dispatch baseline', () => {
     expect(startCodingAgentRunMock).not.toHaveBeenCalled()
   })
 })
+
+describe('coding-agent launch after a group run was cancelled', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    managerMock.runIdForSession.mockReturnValue(undefined)
+    managerMock.isSessionLaunchCompatible.mockReturnValue(true)
+    managerMock.isSessionProcessing.mockReturnValue(false)
+    sendCodingAgentRunInputMock.mockResolvedValue({ runId: 'agent-session-1' })
+    writeModelRunProfileTokenMock.mockResolvedValue(undefined)
+    getSystemPromptMock.mockReturnValue('system prompt')
+    getSessionMock.mockReturnValue(null)
+  })
+
+  it('stops the process and never hands it the task when the run stopped being current during launch', async () => {
+    const { handleCodingAgentRun } = await import('../../packages/server/src/modules/studio/services/chat-run/handle-coding-agent-run')
+    let current = true
+    startCodingAgentRunMock.mockImplementation(async () => {
+      current = false // the launch watchdog fired while the process was still starting
+      return { agentSessionId: 'agent-session-1' }
+    })
+    const runSocket = { ...socket(), data: { groupRunIsCurrent: () => current } }
+
+    const started = await handleCodingAgentRun({} as any, runSocket as any, {
+      session_id: 'session-1',
+      input: 'late task',
+      source: 'group_chat',
+      coding_agent_id: 'codex',
+      mode: 'global',
+    }, 'default', new Map([['session-1', state()]]) as any)
+
+    expect(started).toBe(false)
+    expect(managerMock.stop).toHaveBeenCalledWith('session-1', { reportClosed: false })
+    expect(sendCodingAgentRunInputMock).not.toHaveBeenCalled()
+  })
+
+  it('still delivers the task when the group run is current', async () => {
+    const { handleCodingAgentRun } = await import('../../packages/server/src/modules/studio/services/chat-run/handle-coding-agent-run')
+    startCodingAgentRunMock.mockResolvedValue({ agentSessionId: 'agent-session-1' })
+    const runSocket = { ...socket(), data: { groupRunIsCurrent: () => true } }
+
+    await handleCodingAgentRun({} as any, runSocket as any, {
+      session_id: 'session-1',
+      input: 'normal task',
+      source: 'group_chat',
+      coding_agent_id: 'codex',
+      mode: 'global',
+    }, 'default', new Map([['session-1', state()]]) as any)
+
+    expect(sendCodingAgentRunInputMock).toHaveBeenCalledWith('session-1', expect.stringContaining('normal task'), expect.anything())
+  })
+})

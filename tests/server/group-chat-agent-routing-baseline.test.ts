@@ -72,6 +72,55 @@ describe('group chat agent routing baseline', () => {
     }))
   })
 
+  it('delivers an untagged human message through the default route without scheduling JEV routing', async () => {
+    const { human } = await joinHumanAndAgent()
+    groupServer.getStorage().updateRoomConfig('room-1', { defaultAgentId: 'agent-worker' })
+    const schedule = vi.spyOn((groupServer as any).messageRoutingService, 'schedule')
+    const processMentions = vi.spyOn(groupServer.agentClients, 'processMentions').mockResolvedValue({
+      targetCount: 1, deliveredCount: 1, errors: [],
+    })
+
+    await emitAck(human, 'message', { roomId: 'room-1', id: 'plain-default-1', content: 'Please help' })
+
+    expect(processMentions).toHaveBeenCalledTimes(1)
+    expect(processMentions).toHaveBeenCalledWith('room-1', expect.objectContaining({
+      messageId: 'plain-default-1', content: 'Please help', role: 'user',
+    }))
+    expect(schedule).not.toHaveBeenCalled()
+  })
+
+  it('invokes the configured default Agent once for a real socket message', async () => {
+    groupServer.getStorage().updateRoomConfig('room-1', { defaultAgentId: 'agent-worker' })
+    const replyToMention = vi.fn(async () => {})
+    groupServer.agentClients.registerAgentForRoom('room-1', {
+      agentId: 'agent-worker', name: 'Worker', connected: true, replyToMention,
+    } as any)
+    const human = await connectGroupChatClient(port, 'human-1', 'Human')
+    harness.sockets.push(human)
+    await emitAck(human, 'join', { roomId: 'room-1', inviteCode: 'ROOM1', name: 'Human' })
+
+    await emitAck(human, 'message', { roomId: 'room-1', id: 'plain-real-1', content: 'Please help' })
+
+    await vi.waitFor(() => expect(replyToMention).toHaveBeenCalledTimes(1))
+    expect(replyToMention.mock.calls[0]).toBeDefined()
+  })
+
+  it('shows a routing failure when the configured default Agent is unavailable', async () => {
+    const { human } = await joinHumanAndAgent()
+    groupServer.getStorage().updateRoomConfig('room-1', { defaultAgentId: 'agent-worker' })
+    const decisions: any[] = []
+    human.on('message_routing_updated', decision => decisions.push(decision))
+    vi.spyOn(groupServer.agentClients, 'processMentions').mockResolvedValue({
+      targetCount: 1, deliveredCount: 0, errors: ['Default Agent is unavailable'],
+    })
+
+    await emitAck(human, 'message', { roomId: 'room-1', id: 'plain-offline-1', content: 'Please help' })
+
+    await vi.waitFor(() => expect(decisions).toContainEqual(expect.objectContaining({
+      messageId: 'plain-offline-1', status: 'skipped', defaultUnavailable: true,
+    })))
+  })
+
   it('lets an invite guest interact with agents', async () => {
     vi.mocked(isAuthEnabled).mockResolvedValue(true)
     const human = await connectGroupChatClient(port, 'guest-user', 'Guest', { inviteCode: 'ROOM1' })

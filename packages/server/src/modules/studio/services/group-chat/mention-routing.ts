@@ -1,4 +1,6 @@
 export const ALL_AGENTS_MENTION = 'all'
+/** One team answer: every Agent contributes privately, one Agent posts the merged reply. */
+export const ALL_ONE_MENTION = 'allone'
 
 type MentionableAgent = {
     name: string
@@ -28,7 +30,8 @@ export function escapeMentionName(name: string): string {
 }
 
 export function isReservedMentionName(name: string): boolean {
-    return name.trim().toLowerCase() === ALL_AGENTS_MENTION
+    const normalized = name.trim().toLowerCase()
+    return normalized === ALL_AGENTS_MENTION || normalized === ALL_ONE_MENTION
 }
 
 function isBeforeBoundary(char: string | undefined): boolean {
@@ -73,6 +76,19 @@ export function isAllAgentsMentioned(content: string): boolean {
     return isAgentMentioned(content, ALL_AGENTS_MENTION)
 }
 
+export function isAllOneMentioned(content: string): boolean {
+    return isAgentMentioned(content, ALL_ONE_MENTION)
+}
+
+export function hasMentionSyntax(content: string): boolean {
+    const routableContent = maskQuotedMessageBlocks(content)
+    for (let i = 0; i < routableContent.length - 1; i += 1) {
+        if (routableContent[i] === '@' && isBeforeBoundary(routableContent[i - 1])
+            && !/\s|@/.test(routableContent[i + 1])) return true
+    }
+    return false
+}
+
 function isSenderAgent(agent: MentionableAgent, senderId: string): boolean {
     return Boolean(senderId && (agent.id === senderId || agent.agentId === senderId))
 }
@@ -107,10 +123,19 @@ export function resolveStructuredMentionTargets<T extends MentionableAgent>(
     return candidates.filter(agent => participantIds.has(agent.agentId || agent.id || ''))
 }
 
+/**
+ * Break every @name token so posted text can never route to an Agent. Used for
+ * the single @allone team reply, which must not start another round of work.
+ */
+export function neutralizeMentions(content: string): string {
+    return content.replace(/(^|[^a-zA-Z0-9_])@(?=[^\s@])/g, '$1@\u2060')
+}
+
 export function stripMentionRoutingTokens(content: string, ownAgentName: string): string {
     const rangesByKey = new Map<string, MentionRange>()
     for (const range of [
         ...findMentionRanges(content, ALL_AGENTS_MENTION),
+        ...findMentionRanges(content, ALL_ONE_MENTION),
         ...findMentionRanges(content, ownAgentName),
     ]) {
         rangesByKey.set(`${range.start}:${range.end}`, range)

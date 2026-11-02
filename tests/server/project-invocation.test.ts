@@ -6,6 +6,7 @@ import {
   type ProjectInvocationHost,
 } from '../../packages/server/src/modules/studio/services/group-chat/project-invocation'
 import { AgentClients, AgentClient } from '../../packages/server/src/modules/studio/services/group-chat/agent-clients'
+import { currentPublicationLease } from '../../packages/server/src/modules/studio/services/group-chat/publication-authority'
 
 const target = { roomId: 'room-1', messageId: 'message-1', agentId: 'agent-1', queueId: 'queue-1' }
 const carrier: ProjectCarrier = { version: 1, binding_ref: 'protected-ref', binding_digest: 'a'.repeat(64) }
@@ -138,13 +139,27 @@ function queueHarness(adapter?: ProjectInvocationAdapter) {
   const effect = vi.fn(async () => {})
   const agent = { agentId: target.agentId, name: 'Worker', connected: true, projectInvocationBoundary: true as const, replyToMention: () => runProjectInvocationEffect(target, effect), releaseInvocation: vi.fn() }
   clients.rooms.set(target.roomId, new Map([[agent.agentId, agent]]))
-  const storage = { enqueueExecutionQueueItem: vi.fn(() => ({ id: target.queueId })), startExecutionQueueItem: vi.fn(() => true), finishExecutionQueueItem: vi.fn() }
+  const storage = { enqueueExecutionQueueItem: vi.fn(() => ({ id: target.queueId })), startExecutionQueueItem: vi.fn(() => true), finishExecutionQueueItem: vi.fn(), getPublicationLease: vi.fn(() => undefined as { queueId: string; epoch: number } | undefined) }
   clients._storage = storage
   const message = { messageId: target.messageId!, content: '@Worker work', senderName: 'Owner', senderId: 'member-1', timestamp: 1, role: 'user' as const }
   return { clients, effect, storage, agent, message }
 }
 
 describe('actual Group Chat dispatch integration', () => {
+  it('retains the publication lease through a protected project invocation', async () => {
+    const h = host()
+    const q = queueHarness(new ProjectInvocationAdapter(h))
+    const lease = { queueId: target.queueId, epoch: 7 }
+    q.storage.getPublicationLease.mockReturnValue(lease)
+    const observed: Array<typeof lease | undefined> = []
+    q.agent.replyToMention = () => runProjectInvocationEffect(target, async () => {
+      observed.push(currentPublicationLease())
+    })
+    expect(await q.clients.processMentions(target.roomId, q.message)).toMatchObject({ deliveredCount: 1 })
+    expect(h.runEffect).toHaveBeenCalledOnce()
+    expect(observed).toEqual([lease])
+  })
+
   it('preserves default dispatch without installing a host', async () => {
     const q = queueHarness()
     const result = await q.clients.processMentions(target.roomId, q.message)

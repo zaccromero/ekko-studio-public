@@ -1,6 +1,6 @@
 export type MentionOption = {
     key: string
-    type: 'all' | 'agent'
+    type: 'all' | 'allone' | 'agent'
     name: string
     participantId?: string
     label: string
@@ -16,7 +16,8 @@ type MentionAgent = {
 }
 
 function isReservedMentionName(name: string): boolean {
-    return name.trim().toLowerCase() === 'all'
+    const normalized = name.trim().toLowerCase()
+    return normalized === 'all' || normalized === 'allone'
 }
 
 export function buildMentionOptions(
@@ -35,6 +36,17 @@ export function buildMentionOptions(
             name: 'all',
             label: '@all',
             description: allDescription,
+        })
+    }
+    // @allone is routed from the message text (one merged team answer), so it
+    // inserts text only and never becomes a structured mention.
+    if (allowAll && normalizedQuery && 'allone'.includes(normalizedQuery) && normalizedQuery !== 'all') {
+        options.push({
+            key: 'special:allone',
+            type: 'allone',
+            name: 'allone',
+            label: '@allone',
+            description: '',
         })
     }
 

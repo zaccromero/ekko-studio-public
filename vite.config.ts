@@ -69,6 +69,8 @@ export default defineConfig({
     // Pre-bundle all large dependencies for faster builds
     include: [
       'monaco-editor',
+      // Discover this lazy worker dependency before opening a workbook triggers a reload.
+      'read-excel-file/web-worker',
       'mermaid',
       'vue',
       'vue-router',

@@ -473,6 +473,63 @@ describe('coding agent completion errors', () => {
   })
 })
 
+describe('Claude failure diagnostics', () => {
+  it.each([
+    { name: 'structured errors with a nonzero exit', code: 1, records: [
+      { type: 'result', subtype: 'error_during_execution', is_error: true, errors: [
+        'Provider rejected request: opaque-private-credential',
+        { message: 'Authorization: Bearer sk-test-provider-secret' },
+        { api_key: 'never-export-object-secret' },
+        'x'.repeat(5000),
+      ] },
+    ], expected: 'Provider rejected request', failed: true },
+    { name: 'structured failure despite a zero exit', code: 0, records: [
+      { type: 'result', is_error: true, result: 'The native provider is unavailable' },
+      { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'late text after failure' }] } },
+    ], expected: 'native provider is unavailable', failed: true },
+    { name: 'error subtype without optional error text', code: 0, records: [
+      { type: 'result', subtype: 'error_max_turns' },
+    ], expected: 'Claude Code reported a failed result (error_max_turns)', failed: true },
+    { name: 'error-only non-JSON stdout on failed exit', code: 1, records: [],
+      plain: 'Error: Startup rejected opaque-private-credential', expected: 'Startup rejected [redacted]', failed: true },
+    { name: 'ordinary result text containing an error example', code: 0, records: [
+      { type: 'result', subtype: 'success', is_error: false, result: 'API Error: 529 is an example, not a failed run.' },
+    ], expected: 'API Error: 529 is an example', failed: false },
+  ] as Array<{ name: string; code: number; records: unknown[]; plain?: string; expected: string; failed: boolean }>)('preserves $name without losing terminal state or exposing credentials', async ({ code, records, plain, expected, failed }) => {
+    initAllHermesTables()
+    const fixtureDir = mkdtempSync(join(tmpdir(), 'claude-failure-detail-'))
+    const fixturePath = join(fixtureDir, 'stream.cjs')
+    const output = [...(plain ? [plain] : []), ...records.map(record => JSON.stringify(record))].join('\n') + '\n'
+    writeFileSync(fixturePath, `process.stdin.resume(); process.stdin.on('end', () => process.stdout.write(${JSON.stringify(output)}, () => process.exit(${code})));`)
+    const manager = new CodingAgentRunManager()
+    const sessionId = `claude-failure-detail-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    const emitted = vi.fn()
+    ;(manager as any).emitToChat = emitted
+    ;(manager as any).refreshCodingAgentUsage = async () => {}
+    try {
+      manager.start({ agentSessionId: sessionId, sessionId, agentId: 'claude-code', mode: 'scoped',
+        profile: 'default', provider: 'test', model: 'test', command: process.execPath,
+        args: [fixturePath], shellCommand: process.execPath, workspaceDir: fixtureDir,
+        env: { PROVIDER_ACCESS_TOKEN: 'opaque-private-credential' },
+        state: { messages: [], isWorking: false, events: [], queue: [] } })
+      manager.send(sessionId, 'read-only synthetic diagnostic')
+      const terminal = failed ? 'run.failed' : 'run.completed'
+      await vi.waitFor(() => expect(emitted).toHaveBeenCalledWith(sessionId, terminal, expect.anything()), { timeout: 2000 })
+      expect(emitted.mock.calls.filter(call => call[1] === terminal)).toHaveLength(1)
+      expect(emitted).not.toHaveBeenCalledWith(sessionId, failed ? 'run.completed' : 'run.failed', expect.anything())
+      const message = getSessionDetail(sessionId)?.messages.at(-1)
+      expect(message?.content).toContain(expected)
+      expect(message?.finish_reason).toBe(failed ? 'error' : 'stop')
+      expect(message?.content.length).toBeLessThanOrEqual(4100)
+      const published = JSON.stringify({ messages: getSessionDetail(sessionId)?.messages, events: emitted.mock.calls })
+      for (const secret of ['opaque-private-credential', 'sk-test-provider-secret', 'never-export-object-secret', 'late text after failure']) expect(published).not.toContain(secret)
+    } finally {
+      manager.shutdown()
+      rmSync(fixtureDir, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('coding agent image inputs', () => {
   it('builds native Codex image arguments and Claude stream-json image blocks', () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'coding-agent-image-'))

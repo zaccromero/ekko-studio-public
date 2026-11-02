@@ -205,6 +205,7 @@ export interface ManagedCodingAgentRun {
   currentChild?: ChildProcess
   currentChildKillTimer?: ReturnType<typeof setTimeout>
   currentChildStderr?: string
+  claudePrintDiagnosticLines?: string[]
   printResponseId?: string
   printMessageId?: string
   printTextStarted?: boolean
@@ -581,6 +582,33 @@ function exitErrorMessage(agentName: string, code: number | null, stderr?: strin
   const message = `${agentName} exited with code ${code ?? 'unknown'}`
   const detail = String(stderr || '').trim()
   return detail ? `${message}: ${detail}` : message
+}
+
+function claudeDiagnosticText(run: ManagedCodingAgentRun, value: string): string {
+  let text = sanitizeCodingAgentTerminalOutput(value)
+  // Opaque host/scoped credentials need not have a recognizable provider prefix.
+  const env = run.launch.mode === 'global' ? { ...process.env, ...(run.launch.env || {}) } : run.launch.env || {}
+  for (const [key, secret] of Object.entries(env)) {
+    if (/token|secret|password|api[_-]?key|authorization/i.test(key) && typeof secret === 'string' && secret.length >= 8) {
+      text = text.split(secret).join('[redacted]')
+    }
+  }
+  return text
+    .replace(/\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, '[redacted-token]')
+    .replace(/((?:access[_-]?token|refresh[_-]?token|id[_-]?token|password|client[_-]?secret)["'\s:=]+)[A-Za-z0-9._~+/=-]{8,}/gi, '$1[redacted]')
+    .slice(0, 4000)
+}
+
+function claudeResultFailure(run: ManagedCodingAgentRun, event: any): string | null {
+  if (event.is_error !== true && !(typeof event.subtype === 'string' && /^error(?:_|$)/.test(event.subtype))) return null
+  const detail = (value: unknown): string => typeof value === 'string' ? value
+    : value && typeof value === 'object' && typeof (value as { message?: unknown }).message === 'string'
+      ? (value as { message: string }).message : ''
+  const details = [...(Array.isArray(event.errors) ? event.errors.slice(0, 8) : []), event.error, event.result]
+    .map(detail).filter(Boolean)
+  const text = [...new Set(details.map(value => claudeDiagnosticText(run, value)))].join('\n')
+  const subtype = typeof event.subtype === 'string' && /^[a-z_]{1,80}$/.test(event.subtype) ? ` (${event.subtype})` : ''
+  return claudeDiagnosticText(run, text || `Claude Code reported a failed result${subtype}`)
 }
 
 function appendedTextDelta(existing: string, next: string): string {
@@ -2075,6 +2103,7 @@ export class CodingAgentRunManager {
     run.claudeResultUsage = undefined
     run.claudeStreamMessageId = undefined
     run.claudeMessageText = new Map()
+    run.claudePrintDiagnosticLines = []
     run.currentChildStderr = ''
     run.runMarker = undefined
     run.memoryExportStarted = false
@@ -2180,20 +2209,9 @@ export class CodingAgentRunManager {
         this.completeClaudePrintTurn(run, run.claudeResultUsage)
         return
       }
-      this.handleClaudePrintResponseEvent(run, {
-        type: 'response.failed',
-        data: {
-          type: 'response.failed',
-          response: {
-            id: run.printResponseId,
-            object: 'response',
-            status: 'failed',
-            model: run.launch.model,
-            error: { message: exitErrorMessage('Claude Code', code, run.currentChildStderr) },
-            output: [],
-          },
-        },
-      })
+      const detail = claudeDiagnosticText(run,
+        [run.currentChildStderr, ...(run.claudePrintDiagnosticLines || [])].filter(Boolean).join('\n'))
+      this.failClaudePrintTurn(run, exitErrorMessage('Claude Code', code, detail))
     })
   }
 
@@ -2213,7 +2231,11 @@ export class CodingAgentRunManager {
     try {
       event = JSON.parse(trimmed)
     } catch {
-      logger.debug({ runId: run.id, line: sanitizeCodingAgentTerminalOutput(trimmed) }, '[coding-agent-run] ignored non-json Claude print line')
+      const safe = claudeDiagnosticText(run, trimmed)
+      if (/^(?:[A-Za-z]*Error:|API Error:|Failed to |Cannot )/i.test(trimmed)) {
+        run.claudePrintDiagnosticLines = [...(run.claudePrintDiagnosticLines || []), safe].slice(-4)
+      }
+      logger.debug({ runId: run.id, line: safe }, '[coding-agent-run] ignored non-json Claude print line')
       return
     }
 
@@ -2231,7 +2253,7 @@ export class CodingAgentRunManager {
 
     if (event.type === 'assistant' && event.isApiErrorMessage === true) {
       const errorText = claudeContentToText(event.message?.content).trim() || responseErrorMessage(event.error) || 'Claude Code API error'
-      this.failClaudePrintTurn(run, errorText)
+      this.failClaudePrintTurn(run, claudeDiagnosticText(run, errorText))
       return
     }
 
@@ -2269,6 +2291,12 @@ export class CodingAgentRunManager {
 
     if (event.type === 'result') {
       if (run.printCompleted) return
+      const failure = claudeResultFailure(run, event)
+      if (failure) {
+        run.claudeResultUsage = event.usage ?? run.claudeResultUsage
+        this.failClaudePrintTurn(run, failure)
+        return
+      }
       const resultText = String(event.result || '')
       // The process can still emit native messages after a result (for example
       // resumed background notifications). Do not latch printCompleted until

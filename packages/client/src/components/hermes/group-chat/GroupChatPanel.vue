@@ -152,6 +152,11 @@ const summaryConfig = ref<RoomSummaryConfig>({
     summaryEveryTurns: 20,
 })
 const agentHandoffEnabledDraft = ref(true)
+const defaultAgentIdDraft = ref('')
+const defaultAgentOptions = computed(() => [
+    { label: t('groupChat.noDefaultAgent'), value: '' },
+    ...store.roomAgentsForRoom(store.currentRoomId || '').map(agent => ({ label: agent.name, value: agent.agentId })),
+])
 const agentHandoffMaxDepthDraft = ref<number | null>(4)
 const agentHandoffUnlimitedDraft = ref(false)
 const agentHandoffRecommendation = computed(() => Math.max(4, store.agents.length + 1))
@@ -1886,6 +1891,7 @@ async function handleOpenRoomSettings() {
             summaryEveryTurns: room.summaryEveryTurns || 20,
         }
         agentHandoffEnabledDraft.value = Number(room.agentHandoffEnabled ?? 1) === 1
+        defaultAgentIdDraft.value = room.defaultAgentId || ''
         agentHandoffMaxDepthDraft.value = room.agentHandoffMaxDepth ?? 4
         agentHandoffUnlimitedDraft.value = Number(room.agentHandoffUnlimited ?? 0) === 1
     }
@@ -2027,6 +2033,7 @@ async function handleSaveHandoffConfig() {
     if (!roomId || !currentRoomCanManage.value) return
     try {
         const res = await updateRoomConfig(roomId, {
+            defaultAgentId: defaultAgentIdDraft.value,
             agentHandoffEnabled: agentHandoffEnabledDraft.value,
             agentHandoffMaxDepth: agentHandoffMaxDepthDraft.value,
             agentHandoffUnlimited: agentHandoffUnlimitedDraft.value,
@@ -3461,6 +3468,11 @@ function handleClarifyKeydown(event: KeyboardEvent) {
                         </section>
                         <section class="settings-section">
                             <h4>{{ t('groupChat.agentHandoffTitle') }}</h4>
+                            <div class="form-group">
+                                <label class="form-label">{{ t('groupChat.defaultAgent') }}</label>
+                                <NSelect v-model:value="defaultAgentIdDraft" :options="defaultAgentOptions" />
+                                <p class="form-hint">{{ t('groupChat.defaultAgentDescription') }}</p>
+                            </div>
                             <div class="guest-agent-policy-row">
                                 <div>
                                     <strong>{{ t('groupChat.agentHandoffEnabled') }}</strong>

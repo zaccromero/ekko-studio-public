@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test'
+import { test } from './readiness-diagnostics'
+import { expect, type Page } from '@playwright/test'
 import { authenticate, mockChatSocket, mockHermesApi, TEST_ACCESS_KEY } from './fixtures'
 import { sendNewChatMessage } from './new-chat-helpers'
 

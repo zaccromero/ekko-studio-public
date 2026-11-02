@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { mount, flushPromises } from '@vue/test-utils'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { enableAutoUnmount, mount, flushPromises } from '@vue/test-utils'
 
 const fetchSkillUsageStatsMock = vi.hoisted(() => vi.fn())
 const mockProfilesStore = vi.hoisted(() => ({
@@ -76,13 +76,25 @@ const sevenDayStats = {
 }
 
 describe('SkillsUsageView', () => {
+
   beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     fetchSkillUsageStatsMock.mockReset()
     fetchSkillUsageStatsMock.mockResolvedValue(sevenDayStats)
     mockProfilesStore.activeProfileName = 'default'
     mockProfilesStore.profiles = [{ name: 'default' }]
     mockProfilesStore.fetchProfiles.mockReset()
   })
+
+  // Keep cleanup and timer verification in one hook, independent of hook ordering.
+  enableAutoUnmount(unmount => afterEach(() => {
+    try {
+      unmount()
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  }))
 
   it('loads rolling 7 day skill usage and renders statistics beside a skill-colored visual trend', async () => {
     const wrapper = mount(SkillsUsageView)

@@ -785,6 +785,7 @@ describe('Group Chat member/agent identity sync', () => {
     server.contextStatusState = new Map()
     server.storage = {
       getRoom: vi.fn(() => ({ id: 'room-1', name: 'Room', sessionSeed: 'seed-2' })),
+      assertPublicationMessage: vi.fn(),
       getRoomAgentByAgentId: vi.fn(() => ({ id: 'row-1', roomId: 'room-1', agentId: 'agent-stable-1', profile: 'default', name: 'Worker' })),
       updateRoomTotalTokens,
     }
@@ -983,6 +984,7 @@ describe('Group Chat member/agent identity sync', () => {
     }]])
     server.storage = {
       getRoom: vi.fn(() => ({ id: 'room-1', name: 'Room', sessionSeed: 'seed-1' })),
+      assertPublicationMessage: vi.fn(),
       getRoomAgentByAgentId: vi.fn(() => ({
         id: 'row-ekko-1',
         roomId: 'room-1',

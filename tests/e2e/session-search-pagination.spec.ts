@@ -1,4 +1,5 @@
-import { expect, test } from '@playwright/test'
+import { test } from './readiness-diagnostics'
+import { expect } from '@playwright/test'
 import { authenticate, mockChatSocket, mockHermesApi } from './fixtures'
 
 const session = {

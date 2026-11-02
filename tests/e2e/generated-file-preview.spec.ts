@@ -39,6 +39,7 @@ function createXlsxFixture(): Buffer {
       <Default Extension="xml" ContentType="application/xml"/>
       <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
       <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+      <Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
     </Types>`))
   zip.addFile('_rels/.rels', Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
     <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
@@ -46,11 +47,12 @@ function createXlsxFixture(): Buffer {
     </Relationships>`))
   zip.addFile('xl/workbook.xml', Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
     <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-      <sheets><sheet name="Sales Data" sheetId="1" r:id="rId1"/></sheets>
+      <sheets><sheet name="Sales Data" sheetId="1" r:id="rId1"/><sheet name="Summary" sheetId="2" r:id="rId2"/></sheets>
     </workbook>`))
   zip.addFile('xl/_rels/workbook.xml.rels', Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
     <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
       <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+      <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>
     </Relationships>`))
   zip.addFile('xl/worksheets/sheet1.xml', Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
     <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
@@ -58,6 +60,10 @@ function createXlsxFixture(): Buffer {
         <row r="1"><c r="A1" t="inlineStr"><is><t>Product</t></is></c><c r="B1" t="inlineStr"><is><t>Revenue</t></is></c></row>
         <row r="2"><c r="A2" t="inlineStr"><is><t>Hermes</t></is></c><c r="B2"><v>100</v></c></row>
       </sheetData>
+    </worksheet>`))
+  zip.addFile('xl/worksheets/sheet2.xml', Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
+    <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+      <sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Total revenue</t></is></c><c r="B1"><v>100</v></c></row></sheetData>
     </worksheet>`))
   return zip.toBuffer()
 }
@@ -458,7 +464,7 @@ test('HTML source mode remains scrollable while its scrollbar is hidden', async 
   expect(api.unexpectedRequests).toEqual([])
 })
 
-test('XLSX preview parses workbook sheets inside the isolated worker', async ({ page }) => {
+test('XLSX preview parses workbook sheets inside the isolated worker', async ({ page }, testInfo) => {
   const workbookPath = `${sessionWorkspace}/sales.xlsx`
   await authenticate(page, TEST_ACCESS_KEY, 'research')
   await page.addInitScript(({ id, path }) => {
@@ -493,12 +499,19 @@ test('XLSX preview parses workbook sheets inside the isolated worker', async ({ 
   await mockChatSocket(page)
 
   await page.goto(`/#/hermes/session/${sessionId}`)
+  const documentStartedAt = await page.evaluate(() => performance.timeOrigin)
   await page.locator('.markdown-file-link', { hasText: 'sales.xlsx' }).click()
   const panel = page.locator('.chat-tool-panel')
   await expect(panel.getByRole('button', { name: 'Sales Data', exact: true })).toBeVisible()
   await expect(panel.locator('.n-data-table')).toContainText('Product')
   await expect(panel.locator('.n-data-table')).toContainText('Hermes')
   await expect(panel.locator('.n-data-table')).toContainText('100')
+  await panel.getByRole('button', { name: 'Summary', exact: true }).click()
+  await expect(panel.locator('.n-data-table')).toContainText('Total revenue')
+  await panel.getByRole('button', { name: 'Sales Data', exact: true }).click()
+  await expect(panel.locator('.n-data-table')).toContainText('Hermes')
+  expect(await page.evaluate(() => performance.timeOrigin)).toBe(documentStartedAt)
+  await page.screenshot({ path: testInfo.outputPath('xlsx-preview.png') })
   expect(api.unexpectedRequests).toEqual([])
 })
 

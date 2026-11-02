@@ -327,6 +327,12 @@ export async function mockHermesApi(page: Page, options: MockHermesApiOptions = 
       return
     }
 
+    if (pathname === '/api/auth/local-auto-login') {
+      // The opt-in same-machine login is off unless EKKO_LOCAL_AUTO_LOGIN=1; every refusal is a 404.
+      await route.fulfill(jsonResponse({ error: 'Not found' }, 404))
+      return
+    }
+
     if (pathname === '/api/auth/status') {
       await route.fulfill(jsonResponse({ hasPasswordLogin: true, username: 'playwright' }))
       return

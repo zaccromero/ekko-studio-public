@@ -41,7 +41,8 @@ test('replaces the shared header on navigation and leaves page content below it'
     const link = rail.getByRole('link', { name, exact: true })
     const href = await link.getAttribute('href')
     await link.click()
-    await expect.poll(() => new URL(page.url()).hash).toBe(href)
+    const expectedHash = name === 'Models' ? `${href}?modelProfile=research` : href
+    await expect.poll(() => new URL(page.url()).hash).toBe(expectedHash)
     const pageHeader = host.locator(':scope > :not(.header-sidebar-control)')
     await expect(pageHeader).toHaveCount(1)
     await expect(pageHeader).toBeVisible()

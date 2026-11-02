@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test'
+import { test } from './readiness-diagnostics'
+import { expect, type Page } from '@playwright/test'
 import { authenticate, mockChatSocket, mockHermesApi } from './fixtures'
 
 async function setup(page: Page, theme = {}, sessions: unknown[] = []) {
@@ -12,12 +13,44 @@ async function setup(page: Page, theme = {}, sessions: unknown[] = []) {
 
 async function dragSidebar(page: Page, width: number) {
   const handle = page.getByRole('separator', { name: 'Resize sidebar' })
-  const box = (await handle.boundingBox())!
-  const sidebar = (await handle.locator('..').boundingBox())!
+  const { handle: box, sidebar } = await stableSidebarGeometry(page)
   await page.mouse.move(box.x + box.width / 2, box.y + 100)
   await page.mouse.down()
   await page.mouse.move(box.x + box.width / 2 + width - sidebar.width, box.y + 100, { steps: 5 })
   return handle
+}
+
+async function stableSidebarGeometry(page: Page, selector?: string) {
+  type Box = { x: number; y: number; width: number; height: number }
+  type Geometry = { sidebar: Box; handle: Box }
+  let previous: Geometry | null = null
+  let stable: Geometry | null = null
+  await expect.poll(async () => {
+    const next = await page.getByRole('separator', { name: 'Resize sidebar' }).evaluateAll((handles, selector) => {
+      const visible = (element: Element) => element.getClientRects().length > 0
+        && getComputedStyle(element).visibility !== 'hidden'
+      const visibleHandles = handles.filter(visible)
+      if (visibleHandles.length !== 1) return null
+      const handle = visibleHandles[0]!
+      const sidebars = selector ? [...document.querySelectorAll(selector)].filter(visible) : [handle.parentElement].filter(Boolean)
+      if (sidebars.length !== 1 || !visible(sidebars[0]!)) return null
+      const box = (element: Element) => {
+        const { x, y, width, height } = element.getBoundingClientRect()
+        return { x, y, width, height }
+      }
+      const sidebarBox = box(sidebars[0]!)
+      const handleBox = box(handle)
+      return sidebarBox.width > 0 && sidebarBox.height > 0 && handleBox.width > 0 && handleBox.height > 0
+        ? { sidebar: sidebarBox, handle: handleBox } : null
+    }, selector)
+    // Read both elements in one DOM turn, then require a second stable sample.
+    const settled = next !== null && previous !== null && JSON.stringify(next) === JSON.stringify(previous)
+    previous = next
+    stable = settled ? next : null
+    return settled
+  }, { message: `Visible, stable sidebar geometry on ${selector || 'resize handle parent'}` }).toBe(true)
+  if (!stable) throw new Error('Sidebar geometry unavailable after stability assertion')
+  return stable as Geometry
 }
 
 test('drags within bounds, aligns the header, and remembers width across routes and reloads', async ({ page }, testInfo) => {
@@ -55,8 +88,7 @@ test('drags within bounds, aligns the header, and remembers width across routes 
     await expect(page.locator(selector)).toHaveCSS('width', '340px')
     const handle = page.getByRole('separator', { name: 'Resize sidebar' })
     await expect(handle).toBeVisible()
-    const sidebarBox = (await page.locator(selector).boundingBox())!
-    const handleBox = (await handle.boundingBox())!
+    const { sidebar: sidebarBox, handle: handleBox } = await stableSidebarGeometry(page, selector)
     expect(handleBox.x + handleBox.width).toBe(sidebarBox.x + sidebarBox.width - 1)
     await expect(page.locator('.header-sidebar-control')).toHaveCSS('width', '340px')
   }

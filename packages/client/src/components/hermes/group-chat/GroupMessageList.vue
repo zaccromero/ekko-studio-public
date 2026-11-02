@@ -353,6 +353,7 @@ defineExpose({ scrollToBottom })
                             <button type="button" @click="store.acceptRoutingSuggestion(msg.id)">{{ t('groupChat.routingUseSuggestion') }}</button>
                         </div>
                         <div v-else-if="routingDecision(msg)?.status === 'queued'" class="routing-suggestion" role="status">{{ t('groupChat.routingAutoQueued', { agent: routingDecision(msg)!.targetAgentName }) }}</div>
+                        <div v-if="routingDecision(msg)?.defaultUnavailable" class="routing-suggestion routing-warning" role="status">{{ t('groupChat.defaultAgentUnavailable') }}</div>
                         <div v-if="routingDecision(msg)?.handoffComplete === false" class="routing-suggestion routing-warning" role="status">{{ t('groupChat.routingHandoffIncomplete') }}</div>
                         <div v-if="routingDecision(msg)?.loopDetected === true" class="routing-suggestion routing-warning" role="status">{{ t('groupChat.routingLoopDetected') }}</div>
                         <div

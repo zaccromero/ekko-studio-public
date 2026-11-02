@@ -1289,13 +1289,14 @@ export async function updateRoomConfig(ctx: any) {
     }
 
     const roomId = ctx.params.roomId
-    const { name, summaryProfile, summaryProvider, summaryModel, summaryApiMode, summaryEveryTurns, agentHandoffEnabled, agentHandoffMaxDepth, agentHandoffUnlimited } = ctx.request.body as {
+    const { name, summaryProfile, summaryProvider, summaryModel, summaryApiMode, summaryEveryTurns, defaultAgentId, agentHandoffEnabled, agentHandoffMaxDepth, agentHandoffUnlimited } = ctx.request.body as {
         name?: string
         summaryProfile?: string
         summaryProvider?: string
         summaryModel?: string
         summaryApiMode?: string
         summaryEveryTurns?: number
+        defaultAgentId?: string
         agentHandoffEnabled?: boolean
         agentHandoffMaxDepth?: number | null
         agentHandoffUnlimited?: boolean
@@ -1322,7 +1323,7 @@ export async function updateRoomConfig(ctx: any) {
         summaryApiMode,
         summaryEveryTurns,
     ].some(value => value !== undefined)
-    const hasHandoffUpdate = [agentHandoffEnabled, agentHandoffMaxDepth, agentHandoffUnlimited].some(value => value !== undefined)
+    const hasHandoffUpdate = [defaultAgentId, agentHandoffEnabled, agentHandoffMaxDepth, agentHandoffUnlimited].some(value => value !== undefined)
     if (!hasNameUpdate && !hasSummaryUpdate && !hasHandoffUpdate) {
         ctx.status = 400
         ctx.body = { error: 'No room config changes supplied' }
@@ -1364,8 +1365,18 @@ export async function updateRoomConfig(ctx: any) {
         ctx.body = { error: 'agentHandoffMaxDepth must be between 1 and 100 or null' }
         return
     }
+    if (defaultAgentId !== undefined && (typeof defaultAgentId !== 'string' || defaultAgentId.length > 200)) {
+        ctx.status = 400
+        ctx.body = { error: 'Invalid default Agent id' }
+        return
+    }
 
+    let defaultAgentMissing = false
     await chatServer.getRoomSummaryService().runExclusive(roomId, () => {
+        if (defaultAgentId && !storage.getRoomAgents(roomId).some(agent => agent.agentId === defaultAgentId)) {
+            defaultAgentMissing = true
+            return
+        }
         if (hasNameUpdate && normalizedName !== room.name) {
             chatServer!.updateRoomName(roomId, normalizedName)
         }
@@ -1379,11 +1390,17 @@ export async function updateRoomConfig(ctx: any) {
                     summaryEveryTurns: everyTurns,
                 } : {}),
                 ...(agentHandoffEnabled !== undefined ? { agentHandoffEnabled } : {}),
+                ...(defaultAgentId !== undefined ? { defaultAgentId } : {}),
                 ...(agentHandoffMaxDepth !== undefined ? { agentHandoffMaxDepth } : {}),
                 ...(agentHandoffUnlimited !== undefined ? { agentHandoffUnlimited } : {}),
             })
         }
     })
+    if (defaultAgentMissing) {
+        ctx.status = 400
+        ctx.body = { error: 'Default Agent must be a current room member' }
+        return
+    }
     chatServer.broadcastRoomMetadata(roomId)
     ctx.body = {
         room: serializeRoom(

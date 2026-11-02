@@ -1337,6 +1337,7 @@ export const useGroupChatStore = defineStore('groupChat', () => {
             guestAgentApproval?: 'owner'
             maxGuestAgentsPerMember?: number
             allowRemoteWorkspaceAccess?: number
+            defaultAgentId?: string
             agentHandoffEnabled?: number
             agentHandoffMaxDepth?: number | null
             agentHandoffUnlimited?: number
@@ -1357,6 +1358,7 @@ export const useGroupChatStore = defineStore('groupChat', () => {
             if (typeof data.allowRemoteWorkspaceAccess === 'number') {
                 room.allowRemoteWorkspaceAccess = data.allowRemoteWorkspaceAccess
             }
+            if (typeof data.defaultAgentId === 'string') room.defaultAgentId = data.defaultAgentId
             const handoffPolicyChanged = Object.prototype.hasOwnProperty.call(data, 'agentHandoffEnabled')
                 || Object.prototype.hasOwnProperty.call(data, 'agentHandoffMaxDepth')
                 || Object.prototype.hasOwnProperty.call(data, 'agentHandoffUnlimited')

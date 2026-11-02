@@ -1,3 +1,6 @@
+import { currentPublicationLease, installPublicationAuthority, publicationLease, assertWorkerPublication, transferPublicationToRecovery, freezeEarlierPublicationOwners, type PublicationLease } from '../services/group-chat/publication-authority'
+import { enrollRecoveryBeforeStart, ENROLLMENT_FAILED } from '../services/group-chat/task-recovery-enrollment'
+import { recoverCommittedResults } from '../services/group-chat/committed-result-recovery'
 import { getGroupMessageSelection, deleteGroupMessages, groupMessageDeletionError } from '../repositories/group-message-deletion'
 import { registerAppEventState, publishAppState, stateEvent, planStateEvent } from '../services/webhooks/app-event-state'
 import type { BusinessEvent } from '../services/webhooks/business-events'
@@ -39,7 +42,7 @@ import { paginateRecentGroupMessagesCanonical, sliceGroupMessagesCanonical, type
 import { GroupRoomSummaryService, type GroupRoomSummary } from '../services/group-chat/room-summary'
 import { GroupMessageRoutingService, type GroupRoutingDecision } from '../services/group-chat/message-routing'
 import { GroupSummaryReviewService, type GroupSummaryReviewRecord } from '../services/group-chat/summary-review'
-import { isAgentMentioned, isAllAgentsMentioned, isReservedMentionName, resolveMentionTargets } from '../services/group-chat/mention-routing'
+import { isAgentMentioned, isAllAgentsMentioned, isAllOneMentioned, isReservedMentionName, resolveMentionTargets } from '../services/group-chat/mention-routing'
 import { isGroupChatRoomOwner } from '../services/group-chat/access'
 import { normalizeHumanGroupChatContent, type PublishedGroupChatAttachmentBlock } from '../services/group-chat/attachments'
 import { revokeGroupAgentConnector } from '../services/group-chat/agent-relay-store'
@@ -362,6 +365,7 @@ export interface RoomInfo {
     guestAgentApproval: 'owner'
     maxGuestAgentsPerMember: number
     allowRemoteWorkspaceAccess: number
+    defaultAgentId: string
     agentHandoffEnabled: number
     agentHandoffMaxDepth: number | null
     agentHandoffUnlimited: number
@@ -392,6 +396,7 @@ const ROOM_SELECT_COLUMNS = [
     'guestAgentApproval',
     'maxGuestAgentsPerMember',
     'allowRemoteWorkspaceAccess',
+    'defaultAgentId',
     'agentHandoffEnabled',
     'agentHandoffMaxDepth',
     'agentHandoffUnlimited',
@@ -464,6 +469,7 @@ export interface RoomSummaryConfig {
 }
 
 export interface RoomAgentHandoffConfig {
+    defaultAgentId?: string
     agentHandoffEnabled?: boolean
     agentHandoffMaxDepth?: number | null
     agentHandoffUnlimited?: boolean
@@ -743,6 +749,7 @@ class ChatStorage {
     init(): void {
         const db = this.db()
         if (!db) return
+        installPublicationAuthority(db)
         if (!_tablesEnsured) {
             // Tables are now created centrally in initAllHermesTables()
             // Only create indexes here
@@ -1144,6 +1151,7 @@ class ChatStorage {
         if (config.summaryModel !== undefined) { sets.push('summaryModel = ?'); vals.push(config.summaryModel) }
         if (config.summaryApiMode !== undefined) { sets.push('summaryApiMode = ?'); vals.push(config.summaryApiMode) }
         if (config.summaryEveryTurns !== undefined) { sets.push('summaryEveryTurns = ?'); vals.push(config.summaryEveryTurns) }
+        if (config.defaultAgentId !== undefined) { sets.push('defaultAgentId = ?'); vals.push(config.defaultAgentId) }
         if (config.agentHandoffEnabled !== undefined) { sets.push('agentHandoffEnabled = ?'); vals.push(config.agentHandoffEnabled ? 1 : 0) }
         if (config.agentHandoffMaxDepth !== undefined) {
             sets.push('agentHandoffMaxDepth = ?')
@@ -1551,6 +1559,37 @@ class ChatStorage {
              WHERE sourceInstanceId = 'studio' AND attemptId = ? AND status IN ('admitted', 'running')`,
         ).run(terminalMessageId, Date.now(), attemptId)
         return Boolean(result?.changes)
+    }
+
+    private readonly publicationMessages = new Map<string, PublicationLease>()
+
+    getPublicationLease(queueId: string): PublicationLease | undefined {
+        const db = this.db()
+        if (!db) throw new Error('Publication authority unavailable')
+        return publicationLease(db, queueId)
+    }
+
+    registerPublicationMessage(roomId: string, messageId: string, lease: PublicationLease): void {
+        const db = this.db()
+        if (!db) throw new Error('Publication authority unavailable')
+        assertWorkerPublication(db, lease, roomId)
+        const key = `${roomId}:${messageId}`, prior = this.publicationMessages.get(key)
+        if (prior && (prior.queueId !== lease.queueId || prior.epoch !== lease.epoch)) throw new Error('Publication binding collision')
+        this.publicationMessages.set(key, { ...lease })
+    }
+
+    assertPublicationMessage(roomId: string, messageId: string, agentId?: string): void {
+        const lease = this.publicationMessages.get(`${roomId}:${messageId}`)
+        if (!lease) return
+        const db = this.db()
+        if (!db) throw new Error('Publication authority unavailable')
+        assertWorkerPublication(db, lease, roomId, agentId)
+    }
+
+    transferTaskPublication(queueId: string, expectedEpoch: number, roomId: string, ownerAuthUserId: number): PublicationLease {
+        const db = this.db()
+        if (!db) throw new Error('Publication authority unavailable')
+        return this.withImmediateTransaction(db, () => transferPublicationToRecovery(db, queueId, expectedEpoch, roomId, ownerAuthUserId))
     }
 
     registerTrustedAgentMessageMetadata(roomId: string, messageId: string, mentionDepth: unknown, handoffChainId: unknown, continuationAttemptId?: unknown): void {
@@ -2272,6 +2311,9 @@ class ChatStorage {
         if (!db) return { message: msg, totalTokens: 0 }
         db.exec('SAVEPOINT group_message_save')
         try {
+            const invocationLease = currentPublicationLease()
+            if (invocationLease) assertWorkerPublication(db, invocationLease, msg.roomId, msg.senderId)
+            this.assertPublicationMessage(msg.roomId, msg.id, msg.senderId)
             const existing = this.getMessage(msg.id)
             if (msg.tool_name === 'run_usage' || existing?.tool_name === 'run_usage') {
                 const usage = msg.role === 'tool' ? parseGroupRunUsage(msg.content) : null
@@ -2423,6 +2465,8 @@ class ChatStorage {
         try{return this.withImmediateTransaction(db,()=>{if(db.prepare('SELECT 1 FROM gc_message_routing_claims WHERE messageId=?').get(decision.messageId))return null
           const context = db.prepare('SELECT * FROM gc_message_routing_contexts WHERE messageId = ? AND roomId = ? AND requesterMemberId = ?').get(decision.messageId, decision.roomId, requesterMemberId) as any
           const message = db.prepare('SELECT id, roomId, senderId, content, mentions, timestamp FROM gc_messages WHERE id = ?').get(decision.messageId) as any
+          const room = db.prepare('SELECT defaultAgentId FROM gc_rooms WHERE id = ?').get(decision.roomId) as { defaultAgentId?: string } | undefined
+          if (room?.defaultAgentId) return null
           const member = db.prepare('SELECT 1 FROM gc_room_members WHERE roomId = ? AND userId = ?').get(decision.roomId, requesterMemberId)
           const agent = db.prepare('SELECT 1 FROM gc_room_agents WHERE roomId = ? AND agentId = ? AND removedAt = 0').get(decision.roomId, decision.targetAgentId)
           if (!context || !message || !member || !agent || message.senderId !== requesterMemberId || context.messageHash !== decision.messageHash) return null
@@ -2506,20 +2550,33 @@ class ChatStorage {
     }
 
     startExecutionQueueItem(id: string): boolean {
-        const result = this.db()?.prepare(
-            `UPDATE gc_execution_queue
-             SET status = 'running', startedAt = ?, lastError = NULL
-             WHERE id = ? AND status = 'queued'`,
-        ).run(Date.now(), id)
-        return Number(result?.changes || 0) === 1
+        const db = this.db()
+        if (!db) return false
+        try {
+            return this.withImmediateTransaction(db, () => {
+                const queue = db.prepare('SELECT * FROM gc_execution_queue WHERE id=?').get(id) as unknown as StoredGroupExecutionQueueItem | undefined
+                if (!queue || queue.status !== 'queued') return false
+                enrollRecoveryBeforeStart(db, config.appHome, queue)
+                const result = db.prepare(`UPDATE gc_execution_queue SET status='running', startedAt=?, lastError=NULL WHERE id=? AND status='queued'`).run(Date.now(), id)
+                return Number(result.changes) === 1
+            })
+        } catch {
+            // No worker invocation follows false; preserve failed admission and any
+            // partial registration for inspection instead of retrying or deleting it.
+            this.failExecutionQueueItem(id, ENROLLMENT_FAILED)
+            return false
+        }
     }
 
-    finishExecutionQueueItem(id: string, status: 'completed' | 'failed', lastError?: string): void {
+    finishExecutionQueueItem(id: string, status: 'completed' | 'failed' | 'cancelled', lastError?: string): void {
+        const reason = status === 'failed'
+            ? String(lastError || 'Execution failed')
+            : status === 'cancelled' ? String(lastError || 'Cancelled') : null
         this.db()?.prepare(
             `UPDATE gc_execution_queue
              SET status = ?, finishedAt = ?, lastError = ?
              WHERE id = ? AND status = 'running'`,
-        ).run(status, Date.now(), status === 'failed' ? String(lastError || 'Execution failed') : null, id)
+        ).run(status, Date.now(), reason, id)
     }
 
     failExecutionQueueItem(id: string, lastError: string): void {
@@ -3549,6 +3606,28 @@ export class GroupChatServer {
         // Restore agent connections — call restoreWhenReady() after server is listening.
         // The dispatcher starts only after local runtime restoration completes.
         this._restoreScheduled = false
+        const recoveryBootAt = Date.now()
+        const recoveryTimer = setTimeout(() => {
+            const db = getDb()
+            if (!db) return
+            try { freezeEarlierPublicationOwners(db, recoveryBootAt) } catch {
+                logger.warn('[GroupChat] publication ownership reconciliation failed; recovery held')
+                return
+            }
+            recoverCommittedResults({
+                db, appHome: config.appHome, bootAt: recoveryBootAt,
+                persist: message => { this.storage.saveMessageAndRefreshRoom(message) },
+                notify: message => {
+                    this.nsp.to(message.roomId).emit('message', buildOutboundGroupMessage(message))
+                    this.nsp.to(message.roomId).emit('room_updated', {
+                        roomId: message.roomId, totalTokens: this.storage.getRoom(message.roomId)?.totalTokens || 0,
+                    })
+                },
+                report: receipt => logger.info({ recovery: receipt }, '[GroupChat] committed-result recovery'),
+            })
+        }, 0)
+        recoveryTimer.unref()
+        for (const server of servers) server.once('close', () => clearTimeout(recoveryTimer))
     }
 
     getIO(): Server {
@@ -3833,6 +3912,7 @@ export class GroupChatServer {
             name: room.name,
             inviteCode: room.inviteCode,
             totalTokens: room.totalTokens,
+            defaultAgentId: room.defaultAgentId,
             agentHandoffEnabled: room.agentHandoffEnabled,
             agentHandoffMaxDepth: room.agentHandoffMaxDepth,
             agentHandoffUnlimited: room.agentHandoffUnlimited,
@@ -4212,6 +4292,18 @@ export class GroupChatServer {
         socket.on('stop_typing', (data: { roomId?: string }) => this.handleStopTyping(socket, data))
         socket.on('context_status', (data: { roomId?: string; agentName?: string; status?: string; runId?: string }) => this.handleContextStatus(socket, data))
         socket.on('accept_routing_suggestion', (data: { roomId?: string; messageId?: string }, ack?: (response?: unknown) => void) => { void this.handleAcceptRoutingSuggestion(socket, data, ack) })
+        socket.on('transfer_task_publication', (data: { roomId?: string; queueId?: string; expectedEpoch?: number }, ack?: (response?: unknown) => void) => {
+            const roomId = data?.roomId || '', queueId = data?.queueId || ''
+            const joined = this.getOnlineRoomMember(socket, roomId)
+            const authUser = socket.data?.authUser as AuthenticatedUser | undefined
+            if (!joined || joined.member.source !== 'human' || !authUser?.id
+                || joined.member.userId !== authenticatedGroupUserId(authUser.id) || !this.canSocketManageRoom(socket, roomId)) {
+                ack?.({ error: 'Access denied' }); return
+            }
+            try {
+                ack?.({ publication: this.storage.transferTaskPublication(queueId, data.expectedEpoch as number, roomId, authUser.id), owner: 'recovery', instruction: 'Original execution preserved; do not retry' })
+            } catch { ack?.({ error: 'Publication transfer refused; inspect original task; do not retry' }) }
+        })
         socket.on('cancel_execution_queue_item', (data: { roomId?: string; queueId?: string; executionQueueCapability?: string }, ack?: (response?: unknown) => void) => this.handleCancelExecutionQueueItem(socket, data, ack))
         socket.on('interrupt_agent', (data: { roomId?: string; agentName?: string }, ack?: (response?: unknown) => void) => this.handleInterruptAgent(socket, data, ack))
         socket.on('remove_agent', (data: { roomId?: string; agentId?: string }, ack?: (response?: unknown) => void) => this.handleRemoveAgent(socket, data, ack))
@@ -4902,6 +4994,14 @@ export class GroupChatServer {
             })
             return
         }
+        // @allone runs every Agent, so it carries the same owner-only rule as @all.
+        if (canCarryMentions && isAllOneMentioned(contentToText(messageContent)) && !this.canSocketMentionAll(socket, roomId)) {
+            ack?.({
+                code: 'GROUP_CHAT_ALL_MENTION_FORBIDDEN',
+                error: 'Only the room owner can mention @allone',
+            })
+            return
+        }
         const content = contentToStorageString(messageContent)
         const mentionResult = canCarryMentions
             ? this.normalizeStructuredMentions(roomId, member, contentToText(messageContent), data.mentions)
@@ -5003,7 +5103,9 @@ export class GroupChatServer {
             }
         }
 
-        if (canRouteHumanMentions && !hasStructuredAgentTargets && !(savedMsg.mentions || []).length) {
+        if (canRouteHumanMentions && !this.storage.getRoom(roomId)?.defaultAgentId
+            && !hasStructuredAgentTargets && !(savedMsg.mentions || []).length
+            && !isAllOneMentioned(contentToText(savedMsg.content))) {
             const routingMessageHash = hashGroupRoutingMessage(savedMsg)
             const authUserId = this.socketAuthUserIdMap?.get?.(socket.id)
             if (typeof this.storage.saveMessageRoutingContext === 'function' && this.messageRoutingService
@@ -5034,6 +5136,24 @@ export class GroupChatServer {
                 executionQueueCapabilityHash: isHumanMessage
                     ? executionQueueCapabilityHash(data.executionQueueCapability)
                     : '',
+            }).then((delivery) => {
+                if (delivery.errors.includes('Default Agent is unavailable')) {
+                    this.nsp.to(roomId).emit('message_routing_updated', {
+                        messageId: savedMsg.id,
+                        roomId,
+                        targetAgentId: this.storage.getRoom(roomId)?.defaultAgentId || null,
+                        targetAgentName: null,
+                        mode: 'auto',
+                        status: 'skipped',
+                        queueId: null,
+                        confidence: null,
+                        handoffComplete: null,
+                        loopDetected: null,
+                        defaultUnavailable: true,
+                        createdAt: Date.now(),
+                        updatedAt: Date.now(),
+                    })
+                }
             }).catch((err) => {
                 logger.error(`[GroupChat] processMentions error: ${err.message}`)
             }).finally(() => {
@@ -5095,6 +5215,7 @@ export class GroupChatServer {
             role: 'assistant',
             finish_reason: 'streaming',
         }
+        try { this.storage.assertPublicationMessage(roomId, id, member.userId) } catch { return }
         this.streamSnapshots.start(message, String(data.agentSessionId).trim())
         this.nsp.to(roomId).emit('message_stream_start', message)
     }
@@ -5105,6 +5226,7 @@ export class GroupChatServer {
         if (!member) return
         const id = this.normalizeClientMessageId(data.id)
         if (!id || !data.delta) return
+        try { this.storage.assertPublicationMessage(roomId, id, member.userId) } catch { return }
         this.streamSnapshots.append(roomId, id, member.userId, String(data.agentSessionId).trim(), 'content', String(data.delta))
         this.nsp.to(roomId).emit('message_stream_delta', {
             roomId,
@@ -5119,6 +5241,7 @@ export class GroupChatServer {
         if (!member) return
         const id = this.normalizeClientMessageId(data.id)
         if (!id || !data.delta) return
+        try { this.storage.assertPublicationMessage(roomId, id, member.userId) } catch { return }
         this.streamSnapshots.append(roomId, id, member.userId, String(data.agentSessionId).trim(), 'reasoning', String(data.delta))
         this.nsp.to(roomId).emit('message_reasoning_delta', {
             roomId,
@@ -5133,6 +5256,7 @@ export class GroupChatServer {
         if (!member) return
         const id = this.normalizeClientMessageId(data.id)
         if (!id) return
+        try { this.storage.assertPublicationMessage(roomId, id, member.userId) } catch { return }
         this.streamSnapshots.finish(roomId, id, member.userId)
         this.nsp.to(roomId).emit('message_stream_end', { roomId, id })
     }

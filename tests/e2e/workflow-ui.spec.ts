@@ -3,13 +3,17 @@ import { expect, test, type Locator, type Page } from '@playwright/test'
 import { authenticate, mockChatSocket, mockHermesApi, TEST_ACCESS_KEY, TEST_MODEL_GROUP } from './fixtures'
 
 async function selectWorkflowScheduleFrequency(page: Page, modal: Locator, frequency: string) {
-  await modal.getByTestId('workflow-schedule-frequency').click()
-  await page.getByText(frequency, { exact: true }).last().click()
+  await selectWorkflowScheduleField(page, modal, 'workflow-schedule-frequency', frequency)
 }
 
 async function selectWorkflowScheduleField(page: Page, modal: Locator, testId: string, value: string) {
-  await modal.getByTestId(testId).click()
-  await page.getByText(value, { exact: true }).last().click()
+  const field = modal.getByTestId(testId)
+  await field.click()
+  const menu = page.locator('.n-base-select-menu:visible')
+  await expect(menu).toHaveCount(1)
+  await menu.getByText(value, { exact: true }).click()
+  await expect(field).toContainText(value)
+  await expect(menu).toHaveCount(0)
 }
 
 test('workflow Run sends the selected total time budget', async ({ page }) => {

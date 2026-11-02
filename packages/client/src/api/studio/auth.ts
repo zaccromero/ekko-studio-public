@@ -1,5 +1,5 @@
 import { deploymentUrl } from '@/utils/deployment-url'
-import { request } from '../client'
+import { request, setApiKey } from '../client'
 import type { UserThemeSettings } from './theme'
 
 export interface AuthStatus {
@@ -33,6 +33,30 @@ export async function loginWithPassword(username: string, password: string): Pro
   }
   const data = await res.json()
   return data as LoginResponse
+}
+
+let localAutoLoginAttempted = false
+
+/**
+ * Opt-in same-machine login (server flag EKKO_LOCAL_AUTO_LOGIN). Tried once per
+ * page load; any refusal falls through to the normal login screen.
+ */
+export async function tryLocalAutoLogin(): Promise<boolean> {
+  if (localAutoLoginAttempted) return false
+  localAutoLoginAttempted = true
+  try {
+    const res = await fetch(deploymentUrl('/api/auth/local-auto-login'), {
+      method: 'POST',
+      credentials: 'same-origin',
+    })
+    if (!res.ok) return false
+    const data = await res.json() as Partial<LoginResponse>
+    if (!data.token) return false
+    setApiKey(data.token)
+    return true
+  } catch {
+    return false
+  }
 }
 
 export interface CurrentUser {

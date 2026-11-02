@@ -144,7 +144,8 @@ describe('native session goal queries', () => {
         expect(request.tools?.some(tool => tool.name === 'list_session_tasks')).toBe(true)
         expect(request.tools?.some(tool => tool.name === 'update_plan')).toBe(true)
         expect(request.messages[0].content).toContain('## Session Goals')
-        expect(request.messages[0].content).toContain('At the beginning of every turn')
+        expect(request.messages[0].content).toContain('For other turns, before substantive work, call list_session_tasks')
+        expect(request.messages[0].content).toContain('Skip the ledger read for a fully specified command-only request')
         return calls % 2 ? { content: '', toolCalls: [{ id: `goals-${calls}`, name: 'list_session_tasks', arguments: {} }] }
           : { content: 'The session has one unfinished goal.' }
       }),

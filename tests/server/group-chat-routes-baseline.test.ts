@@ -773,6 +773,28 @@ describe('group chat REST route baseline', () => {
     })
   })
 
+  it('lets the room manager choose only a current room Agent as default', async () => {
+    storage.rooms.set('room-default', { id: 'room-default', name: 'Room', inviteCode: 'DEFAULT' })
+    storage.agents.set('room-default', [{ id: 'row-hermes', agentId: 'hermes', name: 'Hermes' }])
+    const endpoint = `${baseUrl}/api/studio/group-chat/rooms/room-default/config`
+
+    const missing = await fetch(endpoint, { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ defaultAgentId: 'another-agent' }) })
+    expect(missing.status).toBe(400)
+    expect(storage.updateRoomConfig).not.toHaveBeenCalled()
+
+    const selected = await fetch(endpoint, { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ defaultAgentId: 'hermes' }) })
+    expect(selected.status).toBe(200)
+    expect(storage.updateRoomConfig).toHaveBeenCalledWith('room-default', { defaultAgentId: 'hermes' })
+    await expect(selected.json()).resolves.toMatchObject({ room: { defaultAgentId: 'hermes' } })
+
+    const cleared = await fetch(endpoint, { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ defaultAgentId: '' }) })
+    expect(cleared.status).toBe(200)
+    expect(storage.updateRoomConfig).toHaveBeenLastCalledWith('room-default', { defaultAgentId: '' })
+  })
+
   it('returns room detail with paging metadata, agents, and members', async () => {
     storage.rooms.set('room-1', { id: 'room-1', name: 'Room', inviteCode: 'ROOM1' })
     storage.messages.set('room-1', [{ id: 'msg-1' }, { id: 'msg-2' }])

@@ -1745,6 +1745,10 @@ export class ChatRunSocket {
         data.onEvent?.(event, payload)
         this.emitPendingInteraction(profile, event, payload)
       }
+      if (socket.data?.groupRunIsCurrent?.() === false) {
+        if (data.session_id) this.finishTaskPlanRun(data.session_id, 'run.completed', undefined, planContext)
+        return
+      }
       try {
         await handleBridgeRun(
           this.nsp, socket, { ...data, task_plan_context_id: planContext, instructions: fullInstructions, onEvent }, profile,
@@ -1781,6 +1785,7 @@ export class ChatRunSocket {
         data.onEvent?.(event, payload)
         this.emitPendingInteraction(profile, event, payload)
       }
+      if (socket.data?.groupRunIsCurrent?.() === false) return
       await handleEkkoAgentRun(
         this.nsp,
         socket,

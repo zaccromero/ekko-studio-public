@@ -161,7 +161,9 @@ test('recovers from a failed catalog load and renders the empty model state', as
   const api = await mockModelApi(page)
   api.setState('error')
   await page.goto('/#/hermes/models?tab=api')
-  await expect(page.getByRole('alert').filter({ hasText: 'Catalog unavailable' })).toBeVisible()
+  // The unbundled dev server compiles ~430 modules on this cold load; CI traces showed the
+  // catalog request firing 6-7s after navigation, past the 5s default.
+  await expect(page.getByRole('alert').filter({ hasText: 'Catalog unavailable' })).toBeVisible({ timeout: 20_000 })
   await page.getByRole('textbox', { name: 'Key name', exact: true }).fill('Still manageable')
   await expect(page.getByRole('button', { name: 'Create key', exact: true })).toBeDisabled()
   api.setState('empty')

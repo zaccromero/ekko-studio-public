@@ -14,7 +14,10 @@ import { BrowserManager } from '../../packages/desktop/src/main/browser/browser-
 import { BrowserProfileStore } from '../../packages/desktop/src/main/browser/browser-profile-store'
 
 const roots: string[] = []
+const stores: BrowserProfileStore[] = []
 afterEach(async () => {
+  // Download events enqueue preference writes; drain them before removing fixtures.
+  await Promise.all(stores.splice(0).map(store => store.setTabs(store.active().id, [])))
   vi.clearAllMocks()
   native.openPath.mockResolvedValue('')
   native.showMessageBox.mockResolvedValue({ response: 0 })
@@ -27,6 +30,7 @@ async function setup() {
   const internal = manager as any
   const store = internal.profileStore as BrowserProfileStore
   await store.initialize()
+  stores.push(store)
   const profile = store.active()
   internal.activeProfileId = profile.id
   const contents = {}
@@ -188,6 +192,8 @@ it('refreshes file availability without deleting the file or history, including 
 
 it('restores completed history and removal across a manager restart, refusing replaced files', async () => {
   const s = await completed()
+  // A restarted manager must not overlap the prior manager's queued preference write.
+  await s.store.setTabs(s.profile.id, s.profile.tabs)
   async function restart() {
     const manager = new BrowserManager({} as BrowserWindow, s.store.root)
     ;(manager as any).restoreTabs = async () => {}

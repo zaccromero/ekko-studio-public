@@ -23,7 +23,7 @@ describe('group chat authoritative execution queue', () => {
     harness?.cleanup()
   })
 
-  it.each([false, true])('checks the current message hash in the auto-routing transaction (edited=%s)', edited => {
+  it.each([[false, false], [true, false], [false, true]])('checks stale auto-routing in the transaction (edited=%s, default selected=%s)', (edited, defaultSelected) => {
     const storage = harness.groupServer.getStorage()
     storage.addRoomMember('room-1', 'human-1', 'Owner', '', '')
     const message = { id: 'auto-message', roomId: 'room-1', senderId: 'human-1', senderName: 'Owner',
@@ -33,11 +33,12 @@ describe('group chat authoritative execution queue', () => {
       senderId: message.senderId, content: message.content, mentions: message.mentions, timestamp: message.timestamp })).digest('hex')
     storage.saveMessageRoutingContext({ messageId: message.id, roomId: message.roomId, messageHash, requesterMemberId: message.senderId })
     if (edited) storage.saveMessageAndRefreshRoom({ ...message, content: 'Cancel this task' } as any)
+    if (defaultSelected) storage.updateRoomConfig('room-1', { defaultAgentId: 'agent-worker' })
     const result = storage.claimAndEnqueueAutoRouting({ messageId: message.id, roomId: message.roomId, messageHash,
       candidateHash: 'candidates', configHash: 'config', targetAgentId: 'agent-worker', targetAgentName: 'Worker',
       mode: 'auto', status: 'suggested', queueId: null, confidence: .99, handoffComplete: true, loopDetected: false,
       createdAt: Date.now(), updatedAt: Date.now() }, message.senderId, message.content)
-    if (edited) {
+    if (edited || defaultSelected) {
       expect(result).toBeNull()
       expect(storage.listQueuedExecutionItems(message.roomId)).toHaveLength(0)
     } else {

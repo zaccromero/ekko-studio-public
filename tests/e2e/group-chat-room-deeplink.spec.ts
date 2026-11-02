@@ -5,7 +5,7 @@ import type { AvailableModelGroup } from '../../packages/client/src/api/hermes/s
 type DesktopPlatform = 'darwin' | 'win32'
 
 const baseRooms = [
-  { id: 'room-alpha', name: 'Alpha Room', inviteCode: 'ALPHA1', canManage: true, workspace: '/tmp/alpha', triggerTokens: 100000, maxHistoryTokens: 32000, tailMessageCount: 10, totalTokens: 123, summaryProfile: 'default', summaryProvider: 'test-provider', summaryModel: 'test-model', summaryApiMode: 'chat_completions', summaryEveryTurns: 20, allowGuestAgents: 1, maxGuestAgentsPerMember: 1, allowRemoteWorkspaceAccess: 0, agentHandoffEnabled: 1, agentHandoffMaxDepth: 4, agentHandoffUnlimited: 0, createdAt: 1_790_000_000, lastActiveAt: 1_790_000_001 },
+  { id: 'room-alpha', name: 'Alpha Room', inviteCode: 'ALPHA1', canManage: true, workspace: '/tmp/alpha', triggerTokens: 100000, maxHistoryTokens: 32000, tailMessageCount: 10, totalTokens: 123, summaryProfile: 'default', summaryProvider: 'test-provider', summaryModel: 'test-model', summaryApiMode: 'chat_completions', summaryEveryTurns: 20, allowGuestAgents: 1, maxGuestAgentsPerMember: 1, allowRemoteWorkspaceAccess: 0, defaultAgentId: '', agentHandoffEnabled: 1, agentHandoffMaxDepth: 4, agentHandoffUnlimited: 0, createdAt: 1_790_000_000, lastActiveAt: 1_790_000_001 },
   { id: 'room-beta', name: 'Beta Room', inviteCode: 'BETA22', canManage: true, workspace: '/tmp/beta', triggerTokens: 100000, maxHistoryTokens: 32000, tailMessageCount: 10, totalTokens: 456, allowGuestAgents: 1, maxGuestAgentsPerMember: 1, allowRemoteWorkspaceAccess: 0, createdAt: 1_790_000_000, lastActiveAt: 1_790_000_100 },
   { id: 'room-readonly', name: 'Read Only Room', inviteCode: null, canManage: false, workspace: '/tmp/readonly', triggerTokens: 100000, maxHistoryTokens: 32000, tailMessageCount: 10, totalTokens: 0, createdAt: 1_789_999_999, lastActiveAt: 1_789_999_999 },
 ]
@@ -296,6 +296,7 @@ async function mockGroupChatApi(page: Page, offlinePresence = false, modelGroups
       roomConfigUpdates.push({ roomId, body })
       Object.assign(room, {
         ...(typeof body.agentHandoffEnabled === 'boolean' ? { agentHandoffEnabled: body.agentHandoffEnabled ? 1 : 0 } : {}),
+        ...(typeof body.defaultAgentId === 'string' ? { defaultAgentId: body.defaultAgentId } : {}),
         ...(body.agentHandoffMaxDepth !== undefined ? { agentHandoffMaxDepth: body.agentHandoffMaxDepth } : {}),
         ...(typeof body.agentHandoffUnlimited === 'boolean' ? { agentHandoffUnlimited: body.agentHandoffUnlimited ? 1 : 0 } : {}),
       })
@@ -1739,6 +1740,20 @@ test.describe('group chat room deep links', () => {
     })
 
     await expect(stopCard).toHaveCount(0)
+  })
+
+  test('lets the owner choose a default room Agent in settings', async ({ page }) => {
+    const api = await setup(page, '/#/hermes/group-chat/room/room-alpha')
+    await page.locator('.chat-header .header-info .compression-settings-button').click()
+    const drawer = page.locator('.n-drawer').filter({ has: page.locator('.room-settings-drawer') })
+    const section = drawer.locator('.settings-section').filter({ hasText: 'Agent handoff' })
+    await section.locator('.n-select').click()
+    await page.locator('.n-base-select-option').filter({ hasText: 'Worker' }).click()
+    const configResponse = page.waitForResponse(response => response.request().method() === 'PUT'
+      && response.url().includes('/api/studio/group-chat/rooms/room-alpha/config'))
+    await section.getByRole('button', { name: 'Save' }).click()
+    await expect((await configResponse).status()).toBe(200)
+    expect(api.roomConfigUpdates.at(-1)).toMatchObject({ roomId: 'room-alpha', body: { defaultAgentId: 'agent-1' } })
   })
 
   test('continues one stopped chain without changing room handoff settings', async ({ page }) => {

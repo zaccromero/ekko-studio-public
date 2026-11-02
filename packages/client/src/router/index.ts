@@ -3,6 +3,7 @@ import { hasApiKey, isStoredSuperAdmin } from '@/api/client'
 import { hasDesktopBrowserBridge } from '@/utils/desktop-bridge'
 import { resolveLoginRedirect } from '@/utils/login-redirect'
 import { captureProviderImport } from '@/utils/provider-import'
+import { tryLocalAutoLogin } from '@/api/studio/auth'
 
 const router = createRouter({
   history: createWebHashHistory(),
@@ -328,6 +329,9 @@ router.beforeEach(async (to, _from, next) => {
     return
   }
   await ensureDesktopAuth()
+  // Same-machine auto-login is for the owner's own console only: never probe from
+  // public pages (invite/share links must make no auth or protected calls).
+  if (!hasApiKey() && (!to.meta.public || to.name === 'login')) await tryLocalAutoLogin()
 
   if (to.name === 'codingAgent.config' && ['plugins', 'presets'].includes(String(to.params.section)) && to.params.agentId !== 'dsh') {
     next({ name: 'codingAgent.config', params: { ...to.params, section: 'settings' }, replace: true })

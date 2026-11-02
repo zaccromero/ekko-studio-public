@@ -800,6 +800,32 @@
         }
       }
     },
+    "/api/auth/local-auto-login": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Create local-auto-login",
+        "description": "POST /api/auth/local-auto-login",
+        "operationId": "localAutoLogin",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
     "/api/auth/locked-ips": {
       "get": {
         "tags": [
@@ -15236,6 +15262,9 @@
                   },
                   "agentHandoffUnlimited": {
                     "type": "boolean"
+                  },
+                  "defaultAgentId": {
+                    "type": "string"
                   },
                   "name": {
                     "type": "string"

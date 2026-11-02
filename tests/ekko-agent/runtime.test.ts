@@ -2348,6 +2348,21 @@ describe('ekko-agent runtime', () => {
     expect(prompt).toContain('prefer a compatible installed or built-in alternative')
   })
 
+  it('keeps an exact command-only request direct while preserving approvals and ordinary goals', () => {
+    const prompt = buildSystemPrompt({ sessionTasksEnabled: true })
+
+    expect(prompt).toContain('For a fully specified command-only request')
+    expect(prompt).toContain('invoke terminal_exec directly with the supplied executable and args')
+    expect(prompt).toContain('even when the executable is Node.js or Python')
+    expect(prompt).toContain('Do not add dependency probes, task-ledger calls, code_exec wrappers, plans, or Skill reads')
+    expect(prompt).toContain('Normal tool permissions and approval decisions still apply')
+    expect(prompt).toContain('After interruption, failure, or an unknown result, do not relaunch')
+    expect(prompt).toContain('Skip the ledger read for a fully specified command-only request')
+    expect(prompt).toContain('before substantive work, call list_session_tasks')
+    expect(prompt).toContain('only the user can reopen them from the task list')
+    expect(prompt).toContain('do not retry the operation through another tool or language runtime')
+  })
+
   it('buildSystemPrompt injects Windows-native command rules on Windows', () => {
     const prompt = buildSystemPrompt({
       basePrompt: 'Base',

@@ -1,4 +1,5 @@
-import { expect, test } from '@playwright/test'
+import { test } from './readiness-diagnostics'
+import { expect } from '@playwright/test'
 import { authenticate, mockChatSocket, mockHermesApi, TEST_ACCESS_KEY } from './fixtures'
 
 const inputPlaceholder = 'Type a message... (Enter to send, Shift+Enter for new line)'

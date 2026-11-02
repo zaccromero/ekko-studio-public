@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  hasMentionSyntax,
   isAllAgentsMentioned,
   isAgentMentioned,
   isReservedMentionName,
@@ -17,6 +18,13 @@ const agents: TestAgent[] = [
 ]
 
 describe('group chat mention routing', () => {
+  it('distinguishes an untagged message from an unknown mention or email address', () => {
+    expect(hasMentionSyntax('Please help with this')).toBe(false)
+    expect(hasMentionSyntax('mail user@example.com')).toBe(false)
+    expect(hasMentionSyntax('@Unknown please help')).toBe(true)
+    expect(hasMentionSyntax('@allone compare ideas')).toBe(true)
+    expect(hasMentionSyntax('<quoted_message>@Unknown</quoted_message> Please help')).toBe(false)
+  })
   it('reserves @all so it cannot be confused with a literal agent name', () => {
     expect(isReservedMentionName('all')).toBe(true)
     expect(isReservedMentionName(' ALL ')).toBe(true)

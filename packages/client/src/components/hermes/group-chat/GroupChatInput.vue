@@ -422,6 +422,7 @@ function insertMention(name: string, participantId?: string) {
 }
 
 function normalizeMention(mention: GroupChatMention | MentionOption): GroupChatMention | null {
+    if (mention.type === 'allone') return null
     const displayName = 'displayName' in mention ? mention.displayName : mention.name
     const normalized: GroupChatMention = mention.type === 'all'
         ? { type: 'all', displayName: 'all' }

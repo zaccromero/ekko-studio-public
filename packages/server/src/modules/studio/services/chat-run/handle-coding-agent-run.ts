@@ -143,6 +143,12 @@ export async function handleCodingAgentRun(
         ? { groupRuntimeScope: { roomId: groupRoomId, agentId: groupAgentId } }
         : {}),
     }, state)
+    // A group run can be cancelled (launch watchdog, interrupt) while the launch
+    // above was still preparing. Never hand a task to a process nobody observes.
+    if (socket.data?.groupRunIsCurrent?.() === false) {
+      codingAgentRunManager.stop(sessionId, { reportClosed: false })
+      return false
+    }
     runId = started.agentSessionId
   }
   const persistedSession = getSession(sessionId)
