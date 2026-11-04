@@ -59,7 +59,7 @@ describe('group chat structured agent mentions', () => {
     await vi.waitFor(() => expect(replyToMention).toHaveBeenCalledWith('room-1', expect.objectContaining({
       messageId: 'agent-handoff-1',
       mentions: [{ type: 'agent', participantId: 'agent-reviewer' }],
-    }), expect.anything(), expect.any(Function)))
+    }), expect.anything(), expect.any(Function), undefined))
     expect(harness.db.prepare('SELECT mentions FROM gc_messages WHERE id = ?').get('agent-handoff-1')).toEqual({
       mentions: JSON.stringify([{ type: 'agent', participantId: 'agent-reviewer' }]),
     })
@@ -149,7 +149,7 @@ describe('group chat structured agent mentions', () => {
     await vi.waitFor(() => expect(replyToMention).toHaveBeenCalledWith('room-1', expect.objectContaining({
       messageId: 'self-plus-other-reply',
       mentions: [{ type: 'agent', participantId: 'agent-reviewer' }],
-    }), expect.anything(), expect.any(Function)))
+    }), expect.anything(), expect.any(Function), undefined))
   })
 
   it('persists tool output containing mention-like text without authorizing or routing mentions', async () => {

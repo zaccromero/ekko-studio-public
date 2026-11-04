@@ -530,7 +530,9 @@ describe('Group Chat member/agent identity sync', () => {
     const clients = new AgentClients()
     const runtimeClient = {
       agentId: 'agent-stable-1',
+      agent: 'hermes',
       name: 'Worker',
+      setHostedRoomConfig: vi.fn(),
       joinRoom: vi.fn(async () => {
         throw new Error('join failed')
       }),

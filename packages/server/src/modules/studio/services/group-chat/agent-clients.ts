@@ -46,6 +46,10 @@ import {
     stripMentionRoutingTokens,
 } from './mention-routing'
 import { buildAgentInstructions, buildNonOwnerRequestSecurityPrompt } from './agent-prompt'
+import { getDb } from '../../infrastructure/database'
+import { HermesHostedRoomCoordinator } from './hermes-hosted-room-coordinator'
+import { resolveHermesHostedRoomConfig, type HermesHostedRoomConfig } from './hermes-hosted-room-config'
+import { HermesRoomGrantClient } from './hermes-room-grant-client'
 
 export const GROUP_CHAT_AGENT_SOCKET_SECRET = randomBytes(32).toString('hex')
 
@@ -261,6 +265,8 @@ export interface GroupAgentEventSink {
 
 export interface GroupAgentExecutor {
     readonly projectInvocationBoundary?: true
+    /** Hosted transports need a durable card even for Agent-to-Agent turns. */
+    readonly requiresDurableQueue?: true
     readonly agentId: string
     /** True when replyToMention honours MentionMessage.privateCapture (local Agents only). */
     readonly supportsPrivateCapture?: boolean
@@ -294,6 +300,7 @@ export interface GroupAgentExecutor {
         msg: MentionMessage,
         runtimeContext?: GroupRuntimeContext,
         onStatus?: (status: 'compressing' | 'replying' | 'ready', extra?: Record<string, unknown>) => void,
+        invocation?: { queueId: string; sequence: number },
     ): Promise<void>
     setStorage(storage: any): void
     setWorkspaceDiffBroadcaster(broadcaster: WorkspaceDiffBroadcaster | null): void
@@ -376,9 +383,10 @@ export interface GroupChatRunService {
 // ─── Agent Client (single connection) ─────────────────────────
 
 export class AgentClient implements GroupAgentExecutor {
-    readonly projectInvocationBoundary = true as const
+    get projectInvocationBoundary(): true | undefined { return this.hostedRoom ? undefined : true }
     readonly agentId: string
-    readonly supportsPrivateCapture = true
+    get supportsPrivateCapture(): boolean { return this.hostedRoom === null }
+    get requiresDurableQueue(): true | undefined { return this.hostedRoom ? true : undefined }
     readonly agent: 'hermes' | 'ekko' | 'codex' | 'claude' | 'pi' | 'grok' | 'opencode' | 'dsh' | 'cursor' | 'antigravity' | 'qwen' | 'kimi' | 'codebuddy' | 'qoder' | 'copilot' | 'zcode'
     readonly agentMode: 'scoped' | 'global'
     readonly profile: string
@@ -415,6 +423,7 @@ export class AgentClient implements GroupAgentExecutor {
     // serialized by its mention queue, so at most one capture is live per room.
     private privateCaptures = new Map<string, PrivateReplyCapture>()
     private roomInterrupts = new Map<string, number>()
+    private hostedRoom: HermesHostedRoomConfig | null = null
 
     constructor(config: AgentConfig, handlers: AgentEventHandler = {}, eventSink: GroupAgentEventSink | null = null) {
         this.agentId = config.agentId || Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
@@ -447,6 +456,13 @@ export class AgentClient implements GroupAgentExecutor {
 
     setStorage(storage: any): void {
         this.storage = storage
+    }
+
+    setHostedRoomConfig(config: HermesHostedRoomConfig | null): void {
+        if (config && (config.agentId !== this.agentId || this.agent !== 'hermes')) {
+            throw new Error('Hermes hosted room configuration does not match the Agent')
+        }
+        this.hostedRoom = config
     }
 
     setWorkspaceDiffBroadcaster(broadcaster: WorkspaceDiffBroadcaster | null): void {
@@ -744,6 +760,11 @@ export class AgentClient implements GroupAgentExecutor {
     }
 
     async interrupt(roomId: string): Promise<boolean> {
+        if (this.hostedRoom?.roomId === roomId) {
+            const open = getDb()?.prepare(`SELECT 1 FROM gc_hermes_hosted_room_runs
+                WHERE roomId=? AND state IN ('reserved','admission_unknown','admitted') LIMIT 1`).get(roomId)
+            if (open || this.activeSessions.has(roomId)) return false
+        }
         const sessionId = this.activeSessions.get(roomId)
         if (!sessionId) return true
         if (this.agent !== 'hermes') {
@@ -1529,11 +1550,94 @@ export class AgentClient implements GroupAgentExecutor {
         }
     }
 
+    private async replyToHostedHermes(
+        roomId: string,
+        msg: MentionMessage,
+        runtimeContext: GroupRuntimeContext,
+        invocation: { queueId: string; sequence: number } | undefined,
+        onStatus?: (status: 'compressing' | 'replying' | 'ready', extra?: Record<string, unknown>) => void,
+    ): Promise<void> {
+        const config = this.hostedRoom
+        if (!config || config.roomId !== roomId || !invocation || !msg.messageId
+            || !['user', 'assistant'].includes(String(msg.role || ''))
+            || (Array.isArray(msg.input) && msg.input.some(block => block.type !== 'text'))) {
+            throw new Error('Hermes VM room run requires a queued text message in its selected room')
+        }
+        const db = getDb()
+        if (!db) throw new Error('Hermes VM room ledger is unavailable')
+        const room = this.storage?.getRoom?.(roomId)
+        const members = [
+            ...(this.storage?.getRoomMembers?.(roomId) || []).map((member: any) => ({
+                userId: String(member.userId || member.id || ''), name: String(member.name || ''),
+                description: String(member.description || ''), kind: 'human' as const,
+            })),
+            ...(this.storage?.getMentionableRoomAgents?.(roomId) || this.storage?.getRoomAgents?.(roomId) || [])
+                .map((agent: any) => ({
+                    userId: String(agent.agentId || agent.id || ''), name: String(agent.name || ''),
+                    description: String(agent.description || ''), kind: 'agent' as const,
+                })),
+        ].filter(member => member.name)
+        const instructions = buildAgentInstructions({
+            agentName: this.name, roomName: String(room?.name || roomId),
+            agentDescription: this.description, memberNames: members.map(member => member.name), members,
+        })
+        const peerSecurity = msg.targetOwnerMemberId && msg.senderId !== msg.targetOwnerMemberId
+            ? buildNonOwnerRequestSecurityPrompt({
+                requesterName: msg.senderName, requesterId: msg.senderId,
+                ownerMemberId: msg.targetOwnerMemberId,
+                workspaceRoot: String(room?.workspace || '').trim(),
+            })
+            : ''
+        const history = runtimeContext.history.slice(-12).map(item =>
+            `${item.senderName} (${item.role}): ${item.content}`).join('\n')
+        const prompt = [
+            instructions,
+            peerSecurity,
+            'Discuss and plan within the room. A message is not permission to access another project or change a system.',
+            runtimeContext.summary ? `Room summary:\n${runtimeContext.summary}` : '',
+            history ? `Recent room messages:\n${history}` : '',
+            `Current message from ${msg.senderName}:\n${msg.content}`,
+        ].filter(Boolean).join('\n\n')
+        if (prompt.length > 64_000) throw new Error('Hermes VM room prompt is too large')
+        const sessionId = `vm_${invocation.queueId}`
+        this.activeSessions.set(roomId, sessionId)
+        onStatus?.('replying', { agentSessionId: sessionId })
+        try {
+            const grantClient = new HermesRoomGrantClient(config.bootstrapUrl, config.credential)
+            const coordinator = new HermesHostedRoomCoordinator(db, grantClient)
+            const status = await coordinator.executeAndWait({
+                identity: config.identity,
+                target: config.target,
+                queueId: invocation.queueId,
+                messageId: msg.messageId,
+                targetAgentId: this.agentId,
+                task: {
+                    taskId: invocation.queueId,
+                    executionGeneration: 1,
+                    sourceEventSeq: invocation.sequence,
+                    cancellationScopeId: invocation.queueId,
+                    prompt,
+                    traceId: randomUUID(),
+                },
+            })
+            if (status.status !== 'completed' || status.completed !== true || status.partial === true
+                || typeof status.output !== 'string' || !status.output.trim()) {
+                throw new Error('Hermes VM run returned no complete text reply')
+            }
+            if (!this.storage?.publishHostedResult) throw new Error('Hermes VM result publisher is unavailable')
+            this.storage.publishHostedResult(invocation.queueId)
+        } finally {
+            if (this.activeSessions.get(roomId) === sessionId) this.activeSessions.delete(roomId)
+            onStatus?.('ready', { agentSessionId: sessionId })
+        }
+    }
+
     async replyToMention(
         roomId: string,
         msg: MentionMessage,
         runtimeContext: GroupRuntimeContext = { summary: '', history: [] },
         onStatus?: (status: 'compressing' | 'replying' | 'ready', extra?: Record<string, unknown>) => void,
+        invocation?: { queueId: string; sequence: number },
     ): Promise<void> {
         logger.debug(`[AgentClients] ${this.name} mentioned by ${msg.senderName}: "${msg.content.slice(0, 50)}"`)
         if (msg.privateCapture) {
@@ -1550,6 +1654,10 @@ export class AgentClient implements GroupAgentExecutor {
         }
         if (this.agent !== 'hermes') {
             await this.replyToMentionWithChatRun(roomId, msg, runtimeContext, onStatus)
+            return
+        }
+        if (this.hostedRoom?.roomId === roomId) {
+            await this.replyToHostedHermes(roomId, msg, runtimeContext, invocation, onStatus)
             return
         }
         const runMessageId = groupMessageId(roomId, this.profile, this.name)
@@ -2578,6 +2686,14 @@ export class AgentClients {
      * Connect an agent to a room.
      */
     async addAgentToRoom(roomId: string, client: AgentClient): Promise<JoinResult> {
+        try {
+            client.setHostedRoomConfig(client.agent === 'hermes'
+                ? resolveHermesHostedRoomConfig(roomId, client.agentId)
+                : null)
+        } catch (error) {
+            await client.disconnect()
+            throw error
+        }
         let room = this.rooms.get(roomId)
         if (!room) {
             room = new Map()
@@ -2794,7 +2910,7 @@ export class AgentClients {
 
     private queueMention(roomId: string, agents: GroupAgentExecutor[], msg: MentionMessage): Promise<MentionQueueError | null> {
         const targets = agents.map(agent => {
-            const queued = msg.role === 'user' && msg.messageId
+            const queued = msg.messageId && (msg.role === 'user' || agent.requiresDurableQueue === true)
                 ? this._storage?.enqueueExecutionQueueItem?.({
                     roomId,
                     messageId: msg.messageId,
@@ -3320,7 +3436,14 @@ export class AgentClients {
                         if (receipt) receipt.startedAt ||= Date.now()
                         try {
                             const lease = runnableTarget.queueId ? this._storage?.getPublicationLease?.(runnableTarget.queueId) : undefined
-                            const invoke = () => agent.replyToMention(roomId, targetMessage, runtimeContext, onStatus)
+                            const queueItem = runnableTarget.queueId
+                                ? this._storage?.getExecutionQueueItem?.(runnableTarget.queueId)
+                                : null
+                            const invocation = queueItem && queueItem.status === 'running'
+                                && Number.isSafeInteger(queueItem.sequence) && queueItem.sequence > 0
+                                ? { queueId: String(queueItem.id), sequence: Number(queueItem.sequence) }
+                                : undefined
+                            const invoke = () => agent.replyToMention(roomId, targetMessage, runtimeContext, onStatus, invocation)
                             await withPublicationLease(lease, async () => {
                                 if (this.projectInvocation) {
                                     await this.projectInvocation.run({

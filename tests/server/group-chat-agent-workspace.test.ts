@@ -1328,6 +1328,7 @@ describe('group chat agent workspace bridge runs', () => {
       }),
       { summary: '', history: [] },
       expect.any(Function),
+      undefined,
     )
   })
 

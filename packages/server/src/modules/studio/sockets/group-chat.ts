@@ -1,6 +1,11 @@
 import { currentPublicationLease, installPublicationAuthority, publicationLease, assertWorkerPublication, transferPublicationToRecovery, freezeEarlierPublicationOwners, type PublicationLease } from '../services/group-chat/publication-authority'
 import { enrollRecoveryBeforeStart, ENROLLMENT_FAILED } from '../services/group-chat/task-recovery-enrollment'
 import { recoverCommittedResults } from '../services/group-chat/committed-result-recovery'
+import { installHermesHostedRoomLedger } from '../services/group-chat/hermes-hosted-room-ledger'
+import { publishHermesHostedRoomResult, type HostedRoomMessage } from '../services/group-chat/hermes-hosted-room-publication'
+import { HermesHostedRoomCoordinator, HermesHostedRoomPendingError } from '../services/group-chat/hermes-hosted-room-coordinator'
+import { resolveHermesHostedRoomConfig } from '../services/group-chat/hermes-hosted-room-config'
+import { HermesRoomGrantClient } from '../services/group-chat/hermes-room-grant-client'
 import { getGroupMessageSelection, deleteGroupMessages, groupMessageDeletionError } from '../repositories/group-message-deletion'
 import { registerAppEventState, publishAppState, stateEvent, planStateEvent } from '../services/webhooks/app-event-state'
 import type { BusinessEvent } from '../services/webhooks/business-events'
@@ -621,6 +626,21 @@ function storedGroupAgentRunIdentity(row: any): {
 class ChatStorage {
     private readonly trustedAgentMessageMetadata = new Map<string, { mentionDepth: number; handoffChainId: string; continuationAttemptId: string }>()
     private roomAgentOnlineProvider: ((roomId: string, agentId: string) => boolean) | null = null
+    private hostedResultNotifier: ((message: HostedRoomMessage) => void) | null = null
+
+    setHostedResultNotifier(notify: (message: HostedRoomMessage) => void): void {
+        this.hostedResultNotifier = notify
+    }
+
+    publishHostedResult(queueId: string): 'published' | 'already_published' {
+        const db = this.db()
+        if (!db || !this.hostedResultNotifier) throw new Error('Hermes hosted-room publisher is unavailable')
+        return publishHermesHostedRoomResult({
+            db, queueId,
+            persist: message => { this.saveMessageAndRefreshRoom(message) },
+            notify: message => { this.hostedResultNotifier!(message) },
+        })
+    }
 
     private db() { return getDb() }
 
@@ -750,6 +770,7 @@ class ChatStorage {
         const db = this.db()
         if (!db) return
         installPublicationAuthority(db)
+        installHermesHostedRoomLedger(db)
         if (!_tablesEnsured) {
             // Tables are now created centrally in initAllHermesTables()
             // Only create indexes here
@@ -3489,6 +3510,13 @@ export class GroupChatServer {
         })
         servers.slice(1).forEach((httpServer) => this.io.attach(httpServer))
         this.nsp = this.io.of('/group-chat')
+        this.storage.setHostedResultNotifier(message => {
+            this.nsp.to(message.roomId).emit('message', buildOutboundGroupMessage(message))
+            this.nsp.to(message.roomId).emit('room_updated', {
+                roomId: message.roomId, totalTokens: this.storage.getRoom(message.roomId)?.totalTokens || 0,
+            })
+            this.broadcastExecutionQueue(message.roomId)
+        })
         const eventSocket = (user: AuthenticatedUser) => ({ id: '', data: { authUser: user } } as unknown as Socket)
         const removeGroupEventAccess = registerGroupEventAccess({ canReceive: (user, roomId, event) => {
             const socket = eventSocket(user)
@@ -3628,6 +3656,10 @@ export class GroupChatServer {
         }, 0)
         recoveryTimer.unref()
         for (const server of servers) server.once('close', () => clearTimeout(recoveryTimer))
+        for (const server of servers) server.once('close', () => {
+            if (this.hostedRoomReconcilerTimer) clearInterval(this.hostedRoomReconcilerTimer)
+            this.hostedRoomReconcilerTimer = null
+        })
     }
 
     getIO(): Server {
@@ -4163,6 +4195,55 @@ export class GroupChatServer {
         this._restoreScheduled = true
         await this.restoreAgents()
         this.startHandoffDispatcher()
+        this.startHostedRoomReconciler()
+    }
+
+    private hostedRoomReconcilerTimer: ReturnType<typeof setInterval> | null = null
+    private hostedRoomReconciling = false
+
+    private startHostedRoomReconciler(): void {
+        if (this.hostedRoomReconcilerTimer) return
+        const tick = () => { void this.reconcileHostedRoomRuns().catch(error => {
+            logger.warn({ error }, '[GroupChat] hosted-room reconciliation failed')
+        }) }
+        this.hostedRoomReconcilerTimer = setInterval(tick, 60_000)
+        this.hostedRoomReconcilerTimer.unref?.()
+        tick()
+    }
+
+    private async reconcileHostedRoomRuns(): Promise<void> {
+        if (this.hostedRoomReconciling) return
+        const db = getDb()
+        if (!db) return
+        this.hostedRoomReconciling = true
+        try {
+            const rows = db.prepare(`SELECT queueId,roomId,targetAgentId,state
+                FROM gc_hermes_hosted_room_runs
+                WHERE state IN ('admitted','completed') AND publishedMessageId IS NULL
+                ORDER BY createdAt ASC LIMIT 25`).all() as Array<{
+                    queueId: string; roomId: string; targetAgentId: string; state: string
+                }>
+            for (const row of rows) {
+                try {
+                    if (row.state === 'admitted') {
+                        const scope = resolveHermesHostedRoomConfig(row.roomId, row.targetAgentId)
+                        if (!scope) continue
+                        const coordinator = new HermesHostedRoomCoordinator(db,
+                            new HermesRoomGrantClient(scope.bootstrapUrl, scope.credential))
+                        const status = await coordinator.resumeKnownRun({
+                            queueId: row.queueId, identity: scope.identity, target: scope.target,
+                            maxWaitMs: 2_000, pollIntervalMs: 1_000,
+                        })
+                        if (status.status !== 'completed') continue
+                    }
+                    this.storage.publishHostedResult(row.queueId)
+                } catch (error) {
+                    if (!(error instanceof HermesHostedRoomPendingError)) {
+                        logger.warn({ queueId: row.queueId, error }, '[GroupChat] hosted-room result held')
+                    }
+                }
+            }
+        } finally { this.hostedRoomReconciling = false }
     }
 
     private startHandoffDispatcher(): void {
