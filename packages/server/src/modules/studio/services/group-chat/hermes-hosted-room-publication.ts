@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
 import { getHermesHostedRoomRun } from './hermes-hosted-room-ledger'
+import { hasHermesCompleteTextReply } from './hermes-run-api-client'
 
 export type HostedRoomMessage = {
   id: string
@@ -56,12 +57,10 @@ export function publishHermesHostedRoomResult(options: {
     }
     const terminal: unknown = JSON.parse(run.terminalJson)
     if (!terminal || typeof terminal !== 'object' || Array.isArray(terminal)) throw new Error('Invalid Hermes terminal receipt')
-    const status = terminal as Record<string, unknown>
-    if (status.object !== 'hermes.run' || status.run_id !== run.runId || status.status !== 'completed'
-        || status.completed !== true || status.partial === true
-        || typeof status.output !== 'string' || !status.output.trim()) {
+    if (!hasHermesCompleteTextReply(terminal) || terminal.run_id !== run.runId) {
       throw new Error('Hermes hosted-room result has no complete text reply')
     }
+    const status = terminal
     message = {
       id: `gcvm_${createHash('sha256').update(queueId).digest('hex')}`,
       roomId: run.roomId, senderId: run.targetAgentId, senderName: String(agent.name || run.targetAgentId),

@@ -33,8 +33,7 @@ function fixture() {
   })
   recordHermesRunAdmission(db, 'queue_123', 'run_123')
   recordHermesRunTerminal(db, 'queue_123', 'run_123', 'completed', {
-    object: 'hermes.run', run_id: 'run_123', status: 'completed', completed: true,
-    partial: false, output: 'A concrete plan',
+    object: 'hermes.run', run_id: 'run_123', status: 'completed', output: 'A concrete plan',
   })
   const persist = vi.fn((message: { id: string; roomId: string; senderId: string; role: string; content: string; run_id: string }) => {
     db.prepare(`INSERT INTO gc_messages VALUES (?,?,?,?,?,?)`).run(
@@ -56,6 +55,17 @@ it('publishes one verified VM reply and retains its marker across repeated readb
     expect(db.prepare(`SELECT status FROM gc_execution_queue WHERE id='queue_123'`).get()).toMatchObject({ status: 'completed' })
     const row = db.prepare(`SELECT content,senderId FROM gc_messages WHERE id LIKE 'gcvm_%'`).get() as any
     expect(row).toMatchObject({ content: 'A concrete plan', senderId: 'agent_123' })
+  } finally { db.close() }
+})
+
+it('publishes the saved canonical reply after the room queue recorded a parser failure', () => {
+  const { db, persist, notify } = fixture()
+  try {
+    db.prepare(`UPDATE gc_execution_queue SET status='failed',lastError='Missing optional completed flag' WHERE id='queue_123'`).run()
+    expect(publishHermesHostedRoomResult({ db, queueId: 'queue_123', persist, notify })).toBe('published')
+    expect(db.prepare(`SELECT status,lastError FROM gc_execution_queue WHERE id='queue_123'`).get())
+      .toMatchObject({ status: 'completed', lastError: null })
+    expect(persist).toHaveBeenCalledTimes(1)
   } finally { db.close() }
 })
 

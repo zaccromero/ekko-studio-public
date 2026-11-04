@@ -65,6 +65,16 @@ export function classifyHermesRun(status: HermesRunStatus): HermesRunDisposition
   }
 }
 
+/** The VM's canonical run projection reports terminal status and text, but omits
+ * the optional completed/partial flags carried by the live SSE status. */
+export function hasHermesCompleteTextReply(value: unknown): value is HermesRunStatus & { output: string } {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const status = value as Record<string, unknown>
+  return status.object === 'hermes.run' && typeof status.run_id === 'string' && !!status.run_id
+    && status.status === 'completed' && status.completed !== false && status.partial !== true
+    && typeof status.output === 'string' && !!status.output.trim()
+}
+
 type Transport = typeof fetch
 
 export class HermesRunApiClient {

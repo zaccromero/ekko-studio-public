@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest'
-import { classifyHermesRun, HermesAdmissionUnknownError, HermesRunApiClient, type HermesHostedRoomDispatch, type HermesRunStatus } from '../../packages/server/src/modules/studio/services/group-chat/hermes-run-api-client'
+import { classifyHermesRun, hasHermesCompleteTextReply, HermesAdmissionUnknownError, HermesRunApiClient, type HermesHostedRoomDispatch, type HermesRunStatus } from '../../packages/server/src/modules/studio/services/group-chat/hermes-run-api-client'
 
 const dispatch: HermesHostedRoomDispatch = {
   protocol_version: 2,
@@ -68,6 +68,15 @@ it('keeps approval, failure, and unknown statuses distinct from completed work',
   expect(classifyHermesRun(status('interrupted'))).toBe('failed')
   expect(classifyHermesRun(status('running'))).toBe('pending')
   expect(classifyHermesRun(status('unexpected'))).toBe('unknown')
+})
+
+it('accepts canonical completed text without optional flags but rejects explicit incomplete states', () => {
+  const projected = { object: 'hermes.run', run_id: 'run_123', status: 'completed', output: 'A finished plan' }
+  expect(hasHermesCompleteTextReply(projected)).toBe(true)
+  expect(hasHermesCompleteTextReply({ ...projected, completed: false })).toBe(false)
+  expect(hasHermesCompleteTextReply({ ...projected, partial: true })).toBe(false)
+  expect(hasHermesCompleteTextReply({ ...projected, status: 'running' })).toBe(false)
+  expect(hasHermesCompleteTextReply({ ...projected, output: '   ' })).toBe(false)
 })
 
 it('does not retry an uncertain admission or invent a second idempotency key', async () => {

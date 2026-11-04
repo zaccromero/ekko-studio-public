@@ -50,6 +50,7 @@ import { getDb } from '../../infrastructure/database'
 import { HermesHostedRoomCoordinator } from './hermes-hosted-room-coordinator'
 import { resolveHermesHostedRoomConfig, type HermesHostedRoomConfig } from './hermes-hosted-room-config'
 import { HermesRoomGrantClient } from './hermes-room-grant-client'
+import { hasHermesCompleteTextReply } from './hermes-run-api-client'
 
 export const GROUP_CHAT_AGENT_SOCKET_SECRET = randomBytes(32).toString('hex')
 
@@ -1620,8 +1621,7 @@ export class AgentClient implements GroupAgentExecutor {
                     traceId: randomUUID(),
                 },
             })
-            if (status.status !== 'completed' || status.completed !== true || status.partial === true
-                || typeof status.output !== 'string' || !status.output.trim()) {
+            if (!hasHermesCompleteTextReply(status)) {
                 throw new Error('Hermes VM run returned no complete text reply')
             }
             if (!this.storage?.publishHostedResult) throw new Error('Hermes VM result publisher is unavailable')
