@@ -122,7 +122,7 @@ export class HermesRunApiClient {
     const token = this.authorization()
     if (!token || /[\r\n]/.test(token)) throw new Error('Hermes Run API credential is unavailable')
     const headers = new Headers(init.headers)
-    headers.set('Authorization', `Bearer ${token}`)
+    headers.set('Authorization', `HermesRoom ${token}`)
     headers.set('Accept', 'application/json')
     const response = await this.transport(new URL(path, this.base), {
       ...init,
