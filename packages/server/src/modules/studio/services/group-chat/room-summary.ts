@@ -57,6 +57,7 @@ interface SummaryRoom {
   summaryModel: string
   summaryApiMode: string
   summaryEveryTurns: number
+  tailMessageCount?: number
   ownerAuthUserId?: number | null
   summaryGeneration?: number
 }
@@ -256,9 +257,27 @@ export class GroupRoomSummaryService {
       cleanGroupMessages(this.storage.getMessagesForContext(roomId)),
       currentMessageId,
     )
+    const afterSummary = messagesAfterSummary(completed, summary)
+    const rawTailCount = Math.max(0, Math.min(10,
+      Math.floor(Number(this.storage.getRoom(roomId)?.tailMessageCount || 0))))
+    // Keep a small exact-text tail even when summarization advances through it.
+    // Leave room for the hosted Hermes prompt's 64K-character limit.
+    const rawTailBudget = Math.min(8_000, Math.max(0, 55_000 - (summary?.summary.length || 0)))
+    const rawTail: CleanGroupMessage[] = []
+    let rawTailChars = 0
+    for (let index = completed.length - 1; index >= 0 && rawTail.length < rawTailCount; index -= 1) {
+      const message = completed[index]
+      if (rawTailChars + message.content.length > rawTailBudget) break
+      rawTail.unshift(message)
+      rawTailChars += message.content.length
+    }
+    const afterIds = new Set(afterSummary.map(message => message.id))
+    const overlapsSummary = Boolean(summary?.summary && rawTail.some(message => !afterIds.has(message.id)))
     return {
-      summary: summary?.summary || '',
-      history: messagesAfterSummary(completed, summary),
+      summary: overlapsSummary
+        ? `[Recent raw room messages below may overlap this summary. Use the raw messages for exact wording and attribution; do not count repeated turns twice.]\n${summary!.summary}`
+        : summary?.summary || '',
+      history: overlapsSummary ? rawTail : afterSummary,
     }
   }
 

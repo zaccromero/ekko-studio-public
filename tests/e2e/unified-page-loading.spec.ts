@@ -56,10 +56,24 @@ for (const [path, endpoint] of pages) {
       const logo = overlay.locator('.studio-loading-logo')
       await expect(logo).toHaveCSS('width', '72px')
       await expect(logo).toHaveCSS('height', '72px')
+      if (path === '/hermes/version-preview') {
+        // This route uses a bordered page card; the overlay fills its content box.
+        await page.addStyleTag({ content: '.app-main { border: 2px solid transparent !important; }' })
+      }
       await expect.poll(() => overlay.evaluate(element => {
-        const main = document.querySelector('.app-main')!.getBoundingClientRect()
+        const mainElement = document.querySelector('.app-main')!
+        const main = mainElement.getBoundingClientRect()
+        const style = getComputedStyle(mainElement)
+        const left = parseFloat(style.borderLeftWidth) || 0
+        const right = parseFloat(style.borderRightWidth) || 0
+        const top = parseFloat(style.borderTopWidth) || 0
+        const bottom = parseFloat(style.borderBottomWidth) || 0
+        const content = {
+          x: main.x + left, y: main.y + top,
+          width: main.width - left - right, height: main.height - top - bottom,
+        }
         const box = element.getBoundingClientRect()
-        return Math.max(...(['x', 'y', 'width', 'height'] as const).map(key => Math.abs(box[key] - main[key])))
+        return Math.max(...(['x', 'y', 'width', 'height'] as const).map(key => Math.abs(box[key] - content[key])))
       })).toBeLessThanOrEqual(1)
       await expect(surface.locator(':scope > .page-loading-content')).toHaveAttribute('inert', '')
     } finally { release() }

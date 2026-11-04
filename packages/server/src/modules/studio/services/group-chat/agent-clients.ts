@@ -1140,7 +1140,7 @@ export class AgentClient implements GroupAgentExecutor {
                 ? `The following group chat summary covers everything through the summary anchor:\n<group_chat_summary>\n${runtimeContext.summary}\n</group_chat_summary>`
                 : '',
             transcript
-                ? `The following group chat history begins after the summary anchor and ends before the current message:\n<group_chat_history>\n${transcript}\n</group_chat_history>`
+                ? `The following recent raw room messages end before the current message. They may overlap the summary; use them for exact wording and do not count repeated turns twice:\n<group_chat_history>\n${transcript}\n</group_chat_history>`
                 : '',
         ].filter(Boolean).join('\n\n')
         const rawInput = msg.input || msg.content

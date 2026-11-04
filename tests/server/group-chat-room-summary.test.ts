@@ -25,7 +25,7 @@ function message(
   }
 }
 
-function harness(runner: GroupSummaryRunner) {
+function harness(runner: GroupSummaryRunner, tailMessageCount = 0) {
   const summaries = new Map<string, GroupRoomSummary>()
   const runTokens = new Map<string, { token: string; leaseExpiresAt: number }>()
   const messages: any[] = []
@@ -37,6 +37,7 @@ function harness(runner: GroupSummaryRunner) {
       summaryModel: 'gpt-test',
       summaryApiMode: 'chat_completions',
       summaryEveryTurns: 2,
+      tailMessageCount,
     }),
     getMessagesForContext: () => messages,
     getRoomSummary: (roomId: string) => summaries.get(roomId) || null,
@@ -103,6 +104,58 @@ function harness(runner: GroupSummaryRunner) {
 }
 
 describe('group chat rolling room summary', () => {
+  it('keeps a bounded raw peer tail after a summary absorbs the planning round', () => {
+    const { messages, summaries, service } = harness(async () => 'unused', 10)
+    messages.push(
+      message('codex', 'assistant', 'Codex exact plan', 1),
+      message('claude', 'assistant', 'Claude exact objection', 2),
+      message('tool', 'tool', 'private tool output', 3),
+      message('cursor', 'assistant', 'Cursor exact proposal', 4),
+      message('current', 'user', '@Hermes assess peers', 5),
+    )
+    summaries.set('room-1', {
+      roomId: 'room-1', summary: 'The room discussed a plan.', summaryThroughMessageId: 'cursor',
+      summaryThroughMessageTimestamp: 4, summarizedTurnCount: 3, status: 'success',
+      version: 1, updatedAt: 4, lastError: null,
+    })
+
+    const context = service.buildRuntimeContext('room-1', 'current')
+
+    expect(context.history.map(item => item.id)).toEqual(['codex', 'claude', 'cursor'])
+    expect(context.summary).toContain('may overlap this summary')
+    expect(context.summary).toContain('do not count repeated turns twice')
+  })
+
+  it('does not add a large summarized tail back to the model context', () => {
+    const { messages, summaries, service } = harness(async () => 'unused', 10)
+    messages.push(message('large', 'assistant', 'x'.repeat(8_001), 1), message('current', 'user', 'next', 2))
+    summaries.set('room-1', {
+      roomId: 'room-1', summary: 'Large message summarized.', summaryThroughMessageId: 'large',
+      summaryThroughMessageTimestamp: 1, summarizedTurnCount: 1, status: 'success',
+      version: 1, updatedAt: 1, lastError: null,
+    })
+
+    expect(service.buildRuntimeContext('room-1', 'current')).toEqual({
+      summary: 'Large message summarized.', history: [],
+    })
+  })
+
+  it('retains a 6K-character planning exchange like the observed room round', () => {
+    const { messages, summaries, service } = harness(async () => 'unused', 10)
+    for (let index = 0; index < 10; index += 1) {
+      messages.push(message(`peer-${index}`, 'assistant', `Peer ${index}: ${'plan '.repeat(122)}`, index + 1))
+    }
+    messages.push(message('current', 'user', 'continue the plan', 11))
+    summaries.set('room-1', {
+      roomId: 'room-1', summary: 'The ten peers planned.', summaryThroughMessageId: 'peer-9',
+      summaryThroughMessageTimestamp: 10, summarizedTurnCount: 10, status: 'success',
+      version: 1, updatedAt: 10, lastError: null,
+    })
+
+    expect(service.buildRuntimeContext('room-1', 'current').history.map(item => item.id))
+      .toEqual(Array.from({ length: 10 }, (_, index) => `peer-${index}`))
+  })
+
   it('treats rolling history as untrusted structured data and preserves attribution metadata', () => {
     const prompt = buildGroupSummaryUserPrompt(
       'The room chose provider openai.',
