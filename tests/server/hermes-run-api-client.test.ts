@@ -39,7 +39,8 @@ it('admits exactly one keyed run and reads only the matching run ID', async () =
   const admission = transport.mock.calls[0][1]
   expect(admission?.method).toBe('POST')
   expect(new Headers(admission?.headers).get('Idempotency-Key')).toBe('room:task_123:1')
-  expect(new Headers(admission?.headers).get('Authorization')).toBe('Bearer scoped-token')
+  expect(new Headers(admission?.headers).get('Authorization')).toBe('HermesRoom scoped-token')
+  expect(new Headers(transport.mock.calls[1][1]?.headers).get('Authorization')).toBe('HermesRoom scoped-token')
   expect(JSON.parse(String(admission?.body))).toEqual({ input: dispatch.prompt, hosted_room_dispatch: dispatch })
 })
 
