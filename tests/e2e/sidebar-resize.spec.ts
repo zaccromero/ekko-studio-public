@@ -44,7 +44,16 @@ async function stableSidebarGeometry(page: Page, selector?: string) {
         ? { sidebar: sidebarBox, handle: handleBox } : null
     }, selector)
     // Read both elements in one DOM turn, then require a second stable sample.
-    const settled = next !== null && previous !== null && JSON.stringify(next) === JSON.stringify(previous)
+    const close = (a: number, b: number) => Math.abs(a - b) < 0.5
+    const settled = next !== null && previous !== null
+      && close(next.sidebar.x, previous.sidebar.x)
+      && close(next.sidebar.y, previous.sidebar.y)
+      && close(next.sidebar.width, previous.sidebar.width)
+      && close(next.sidebar.height, previous.sidebar.height)
+      && close(next.handle.x, previous.handle.x)
+      && close(next.handle.y, previous.handle.y)
+      && close(next.handle.width, previous.handle.width)
+      && close(next.handle.height, previous.handle.height)
     previous = next
     stable = settled ? next : null
     return settled

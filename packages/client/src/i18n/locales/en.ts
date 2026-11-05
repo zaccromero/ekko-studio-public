@@ -3557,6 +3557,9 @@ export default {
 
   // Group Chat
   groupChat: {
+    cloudflareOutcomeUnknown: 'Cloudflare may have processed this request, but its answer was not received. It will not be sent again automatically.',
+    cloudflareReplyReady: 'Cloudflare answered, but the room could not save the reply. The saved answer can be recovered.',
+    cloudflareReplyRefused: 'Cloudflare did not return a room answer. Check the connection before trying a new request.',
     messageAlreadySummarized: "Already summarized; cannot delete",
     messageSummaryBoundaryUnknown: "Summary boundary unavailable; deletion disabled",
     messageSelectionHint: "Select member messages or entire agent runs. Summarized messages cannot be selected.",

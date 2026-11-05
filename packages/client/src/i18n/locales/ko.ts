@@ -3324,6 +3324,9 @@ export default {
 
   // 변경 이력
   groupChat: {
+    cloudflareOutcomeUnknown: 'Cloudflare가 요청을 처리했을 수 있지만 응답을 받지 못했습니다. 자동으로 다시 전송하지 않습니다.',
+    cloudflareReplyReady: 'Cloudflare가 응답했지만 대화방에 저장하지 못했습니다. 저장된 응답은 복구할 수 있습니다.',
+    cloudflareReplyRefused: 'Cloudflare가 대화방에 응답하지 않았습니다. 다시 시도하기 전에 연결을 확인하세요.',
     messageAlreadySummarized: "이미 요약되어 삭제할 수 없습니다",
     messageSummaryBoundaryUnknown: "요약 경계를 확인할 수 없어 삭제할 수 없습니다",
     messageSelectionHint: "멤버 메시지 또는 에이전트 실행 전체를 선택하세요. 요약된 메시지는 선택할 수 없습니다.",

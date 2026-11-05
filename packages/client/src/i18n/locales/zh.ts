@@ -3605,6 +3605,9 @@ export default {
 
   // 群聊
   groupChat: {
+    cloudflareOutcomeUnknown: 'Cloudflare 可能已处理此请求，但未收到回复。系统不会自动重发。',
+    cloudflareReplyReady: 'Cloudflare 已回复，但聊天室未能保存回复。已保存的回复可以恢复。',
+    cloudflareReplyRefused: 'Cloudflare 未向聊天室返回回复。请检查连接后再试。',
     messageAlreadySummarized: "已被总结，无法删除",
     messageSummaryBoundaryUnknown: "无法确定总结边界，暂不可删除",
     messageSelectionHint: "可选择成员消息或整次 Agent 回复；已总结的消息不可选择。",

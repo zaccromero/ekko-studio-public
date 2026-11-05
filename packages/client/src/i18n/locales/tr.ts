@@ -586,6 +586,9 @@ export default {
     runUsageOutput: 'Çıktı jetonları', runUsageInput: 'Girdi jetonları', runUsageCache: 'Önbellek isabetleri', runUsageCost: 'Tahmini maliyet', runUsageSpeed: 'Jeton hızı', runUsageAverageSpeed: 'Ortalama hız', runUsageEstimatedSpeed: 'Tahmini hız',
   },
   groupChat: {
+    cloudflareOutcomeUnknown: 'Cloudflare isteği işlemiş olabilir ancak yanıt alınamadı. İstek otomatik olarak yeniden gönderilmeyecek.',
+    cloudflareReplyReady: 'Cloudflare yanıt verdi ancak oda yanıtı kaydedemedi. Kaydedilen yanıt kurtarılabilir.',
+    cloudflareReplyRefused: 'Cloudflare odaya yanıt döndürmedi. Yeniden denemeden önce bağlantıyı kontrol edin.',
     messageAlreadySummarized: "Zaten özetlendi; silinemez",
     messageSummaryBoundaryUnknown: "Özet sınırı bilinmiyor; silme devre dışı",
     messageSelectionHint: "Üye mesajlarını veya tüm ajan çalıştırmalarını seçin. Özetlenmiş mesajlar seçilemez.",

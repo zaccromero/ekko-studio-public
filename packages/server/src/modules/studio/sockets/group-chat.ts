@@ -9,6 +9,11 @@ import { consumeHermesHostedPrivateResult, publishHermesHostedRoomResult, type H
 import { HermesHostedRoomCoordinator, HermesHostedRoomPendingError } from '../services/group-chat/hermes-hosted-room-coordinator'
 import { resolveHermesHostedRoomConfig } from '../services/group-chat/hermes-hosted-room-config'
 import { HermesRoomGrantClient } from '../services/group-chat/hermes-room-grant-client'
+import { getCloudflarePersonalTurn, holdCloudflarePersonalUnknown, installCloudflarePersonalTurnJournal,
+    markCloudflarePersonalDispatching, publishCloudflarePersonalRoomTurn, recordCloudflarePersonalResult,
+    refuseCloudflarePersonalTurn, reserveCloudflarePersonalTurn } from '../services/group-chat/cloudflare-personal-turn-journal'
+import { CloudflarePersonalChatClient, CloudflarePersonalChatError } from '../services/group-chat/cloudflare-personal-chat-client'
+import { resolveCloudflarePersonalRoomConfig, type CloudflarePersonalRoomConfig } from '../services/group-chat/cloudflare-personal-room-config'
 import { getGroupMessageSelection, deleteGroupMessages, groupMessageDeletionError } from '../repositories/group-message-deletion'
 import { registerAppEventState, publishAppState, stateEvent, planStateEvent } from '../services/webhooks/app-event-state'
 import type { BusinessEvent } from '../services/webhooks/business-events'
@@ -74,7 +79,7 @@ interface ChatMessage {
     roomId: string
     senderId: string
     senderName: string
-    senderType?: 'member' | 'agent'
+    senderType?: 'member' | 'agent' | 'external'
     senderAgentRecordId?: string
     senderAvatar?: string
     senderAgentType?: RoomAgent['agent']
@@ -683,7 +688,7 @@ class ChatStorage {
             : {}
         return {
             ...row,
-            senderType: agent || mayBeAgent ? 'agent' : 'member',
+            senderType: row.senderType === 'external' ? 'external' : agent || mayBeAgent ? 'agent' : 'member',
             ...(agent ? {
                 senderAgentRecordId: agent.id,
                 senderAvatar: agent.avatar || '',
@@ -775,6 +780,7 @@ class ChatStorage {
         installPublicationAuthority(db)
         installHermesHostedRoomLedger(db)
         installAllOneJournal(db)
+        installCloudflarePersonalTurnJournal(db)
         if (!_tablesEnsured) {
             // Tables are now created centrally in initAllHermesTables()
             // Only create indexes here
@@ -2468,6 +2474,7 @@ class ChatStorage {
                 db.prepare('DELETE FROM gc_allone_contributions WHERE messageId IN (SELECT messageId FROM gc_allone_journal WHERE roomId = ?)').run(roomId)
                 db.prepare('DELETE FROM gc_allone_journal WHERE roomId = ?').run(roomId)
             }
+            db.prepare('DELETE FROM gc_cloud_personal_turns WHERE roomId = ?').run(roomId)
             db.prepare('DELETE FROM gc_execution_queue WHERE roomId = ?').run(roomId)
             db.prepare('DELETE FROM gc_messages WHERE roomId = ?').run(roomId)
             db.prepare('DELETE FROM gc_room_agents WHERE roomId = ? AND removedAt > 0').run(roomId)
@@ -3155,6 +3162,7 @@ class ChatStorage {
             db.prepare('DELETE FROM gc_message_routing_decisions WHERE roomId = ?').run(roomId)
             db.prepare('DELETE FROM gc_message_routing_contexts WHERE roomId = ?').run(roomId)
             db.prepare('DELETE FROM gc_execution_queue WHERE roomId = ?').run(roomId)
+            db.prepare('DELETE FROM gc_cloud_personal_turns WHERE roomId = ?').run(roomId)
             db.prepare('DELETE FROM gc_messages WHERE roomId = ?').run(roomId)
             db.prepare('DELETE FROM gc_handoff_deliveries WHERE attemptId IN (SELECT attemptId FROM gc_handoff_attempts WHERE roomId = ?)').run(roomId)
             db.prepare('DELETE FROM gc_handoff_inbox WHERE attemptId IN (SELECT attemptId FROM gc_handoff_attempts WHERE roomId = ?)').run(roomId)
@@ -3670,6 +3678,23 @@ export class GroupChatServer {
                 },
                 report: receipt => logger.info({ recovery: receipt }, '[GroupChat] committed-result recovery'),
             })
+            const ready = db.prepare("SELECT sourceMessageId FROM gc_cloud_personal_turns WHERE state='ready' AND visibility='room' AND updatedAt < ? ORDER BY createdAt LIMIT 100")
+                .all(recoveryBootAt) as Array<{ sourceMessageId: string }>
+            for (const row of ready) {
+                try {
+                    const saved: { message?: ChatMessage } = {}
+                    publishCloudflarePersonalRoomTurn(db, row.sourceMessageId, candidate => {
+                        saved.message = this.storage.saveMessageAndRefreshRoom(candidate).message
+                    })
+                    if (saved.message) this.nsp.to(saved.message.roomId).emit('message', buildOutboundGroupMessage(saved.message))
+                } catch (error) { logger.warn({ sourceMessageId: row.sourceMessageId, error }, '[GroupChat] Personal cloud ready-result recovery held') }
+            }
+            const interrupted = db.prepare("SELECT sourceMessageId FROM gc_cloud_personal_turns WHERE state='dispatching' AND updatedAt < ? ORDER BY createdAt LIMIT 100")
+                .all(recoveryBootAt) as Array<{ sourceMessageId: string }>
+            for (const row of interrupted) {
+                try { holdCloudflarePersonalUnknown(db, row.sourceMessageId) }
+                catch (error) { logger.warn({ sourceMessageId: row.sourceMessageId, error }, '[GroupChat] Personal cloud interrupted-turn hold failed') }
+            }
         }, 0)
         recoveryTimer.unref()
         for (const server of servers) server.once('close', () => clearTimeout(recoveryTimer))
@@ -4701,6 +4726,47 @@ export class GroupChatServer {
         )
     }
 
+    private async runCloudflarePersonalRoomTurn(socketId: string, source: ChatMessage,
+        question: string, requesterAuthUserId: number, binding: CloudflarePersonalRoomConfig): Promise<void> {
+        const db = getDb()
+        if (!db) return
+        const idempotencyKey = randomUUID()
+        try {
+            reserveCloudflarePersonalTurn(db, { sourceMessageId: source.id, roomId: source.roomId,
+                requesterMemberId: source.senderId, requesterAuthUserId, idempotencyKey, visibility: 'room' })
+            markCloudflarePersonalDispatching(db, source.id)
+            const reply = await new CloudflarePersonalChatClient(binding.endpointUrl, binding.sourceCommit,
+                binding.credential).ask(question, idempotencyKey)
+            recordCloudflarePersonalResult(db, { sourceMessageId: source.id, idempotencyKey,
+                answer: reply.answer, correlationId: reply.correlationId,
+                sourceCommit: reply.sourceCommit, cloudflareVersionId: reply.cloudflareVersionId })
+            let published: ChatMessage | null = null
+            publishCloudflarePersonalRoomTurn(db, source.id, message => {
+                published = this.storage.saveMessageAndRefreshRoom(message).message
+            })
+            if (published) {
+                this.nsp.to(source.roomId).emit('message', buildOutboundGroupMessage(published))
+                this.notifyGroupReply(source.roomId, published)
+            }
+        } catch (error) {
+            const state = getCloudflarePersonalTurn(db, source.id)?.state
+            if (state === 'dispatching') {
+                try {
+                    if (error instanceof CloudflarePersonalChatError && error.outcome === 'refused') {
+                        refuseCloudflarePersonalTurn(db, source.id)
+                    } else {
+                        holdCloudflarePersonalUnknown(db, source.id)
+                    }
+                } catch (journalError) { logger.error(journalError, '[GroupChat] Personal cloud journal transition failed') }
+            }
+            logger.warn(error, '[GroupChat] Personal cloud turn did not publish')
+            this.nsp.to(socketId).emit('cloudflare_personal_turn_status', {
+                sourceMessageId: source.id, roomId: source.roomId,
+                state: getCloudflarePersonalTurn(db, source.id)?.state || 'refused',
+            })
+        }
+    }
+
     private canSocketInterruptAgent(socket: Socket, roomId: string, agentName: string): boolean {
         if (this.canSocketManageRoom(socket, roomId)) return true
         if (this.socketRequestedSourceMap?.get(socket.id) === 'agent') return false
@@ -5178,6 +5244,24 @@ export class GroupChatServer {
             return
         }
         const content = contentToStorageString(messageContent)
+        const cloudMatch = isHumanMessage && typeof data.content === 'string'
+            ? /^\/cloud(?:\s+([\s\S]*))?$/i.exec(data.content.trim()) : null
+        const cloudQuestion = cloudMatch ? (cloudMatch[1] || '').trim() : undefined
+        let cloudBinding: CloudflarePersonalRoomConfig | null = null
+        let cloudOwnerAuthUserId = 0
+        if (cloudQuestion !== undefined) {
+            const authUser = socket.data?.authUser as AuthenticatedUser | undefined
+            cloudOwnerAuthUserId = typeof authUser?.id === 'number' ? authUser.id : 0
+            if (!cloudOwnerAuthUserId || !isGroupChatRoomOwner(this.storage, roomId, authUser)
+                || member?.userId !== authenticatedGroupUserId(cloudOwnerAuthUserId)
+                || !cloudQuestion || cloudQuestion.length > 4_000) {
+                ack?.({ error: 'Cloudflare Personal requires an authenticated room owner and a bounded question' })
+                return
+            }
+            try { cloudBinding = resolveCloudflarePersonalRoomConfig(roomId) }
+            catch { ack?.({ error: 'Cloudflare Personal room binding is unavailable' }); return }
+            if (!cloudBinding) { ack?.({ error: 'Cloudflare Personal is not enabled in this room' }); return }
+        }
         const mentionResult = canCarryMentions
             ? this.normalizeStructuredMentions(roomId, member, contentToText(messageContent), data.mentions)
             : {}
@@ -5242,6 +5326,12 @@ export class GroupChatServer {
         this.notifyGroupReply(roomId, savedMsg)
         this.nsp.to(roomId).emit('room_updated', { roomId, totalTokens })
         ack?.({ id: savedMsg.id })
+
+        if (cloudBinding && cloudQuestion !== undefined) {
+            void this.runCloudflarePersonalRoomTurn(socket.id, savedMsg, cloudQuestion,
+                cloudOwnerAuthUserId, cloudBinding)
+            return
+        }
 
         const structuredAgentTargetId = isAgentReply && Array.isArray(savedMsg.mentions)
             ? String(savedMsg.mentions.find(mention => mention.type === 'agent')?.participantId || '')

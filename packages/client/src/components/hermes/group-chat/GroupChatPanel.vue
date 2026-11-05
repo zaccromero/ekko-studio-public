@@ -116,6 +116,16 @@ const router = useRouter()
 const message = useMessage()
 const appStore = useAppStore()
 const store = useGroupChatStore()
+watch(() => store.cloudflarePersonalTurnStatus, status => {
+    if (!status) return
+    if (status.state === 'outcome_unknown') {
+        message.warning(t('groupChat.cloudflareOutcomeUnknown'))
+    } else if (status.state === 'ready') {
+        message.warning(t('groupChat.cloudflareReplyReady'))
+    } else {
+        message.warning(t('groupChat.cloudflareReplyRefused'))
+    }
+})
 const profilesStore = useProfilesStore()
 const filesStore = useFilesStore()
 const toolPanelStore = useToolPanelStore()

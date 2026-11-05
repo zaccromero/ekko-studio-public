@@ -3194,6 +3194,9 @@ export default {
 
 
   groupChat: {
+    cloudflareOutcomeUnknown: 'Cloudflare мог обработать запрос, но ответ не получен. Автоматической повторной отправки не будет.',
+    cloudflareReplyReady: 'Cloudflare ответил, но комната не смогла сохранить ответ. Сохранённый ответ можно восстановить.',
+    cloudflareReplyRefused: 'Cloudflare не вернул ответ в комнату. Проверьте соединение перед повторной попыткой.',
     messageAlreadySummarized: "Уже включено в сводку; удаление невозможно",
     messageSummaryBoundaryUnknown: "Граница сводки неизвестна; удаление отключено",
     messageSelectionHint: "Выберите сообщения участников или целые запуски агента. Сообщения, включённые в сводку, выбрать нельзя.",

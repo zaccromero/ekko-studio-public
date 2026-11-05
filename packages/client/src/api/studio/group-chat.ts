@@ -213,7 +213,7 @@ export interface ChatMessage {
     roomId: string
     senderId: string
     senderName: string
-    senderType?: 'member' | 'agent'
+    senderType?: 'member' | 'agent' | 'external'
     senderAgentRecordId?: string
     senderAvatar?: string
     senderAgentType?: RoomAgent['agent']

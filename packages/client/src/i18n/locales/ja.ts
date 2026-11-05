@@ -3324,6 +3324,9 @@ export default {
 
   // 更新履歴
   groupChat: {
+    cloudflareOutcomeUnknown: 'Cloudflare がこのリクエストを処理した可能性がありますが、応答を受信できませんでした。自動的には再送しません。',
+    cloudflareReplyReady: 'Cloudflare は応答しましたが、ルームで保存できませんでした。保存済みの応答は復元できます。',
+    cloudflareReplyRefused: 'Cloudflare からルームへの応答がありませんでした。再試行する前に接続を確認してください。',
     messageAlreadySummarized: "要約済みのため削除できません",
     messageSummaryBoundaryUnknown: "要約の境界を確認できないため削除できません",
     messageSelectionHint: "メンバーのメッセージまたはエージェントの実行全体を選択できます。要約済みのメッセージは選択できません。",

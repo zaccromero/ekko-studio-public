@@ -3325,6 +3325,9 @@ jobTriggered: 'Job declenche',
 
   // Journal des modifications
   groupChat: {
+    cloudflareOutcomeUnknown: 'Cloudflare a peut-être traité cette demande, mais sa réponse n’a pas été reçue. Elle ne sera pas renvoyée automatiquement.',
+    cloudflareReplyReady: 'Cloudflare a répondu, mais le salon n’a pas pu enregistrer la réponse. La réponse enregistrée peut être récupérée.',
+    cloudflareReplyRefused: 'Cloudflare n’a pas renvoyé de réponse au salon. Vérifiez la connexion avant de réessayer.',
     messageAlreadySummarized: "Déjà résumé ; suppression impossible",
     messageSummaryBoundaryUnknown: "Limite du résumé indisponible ; suppression désactivée",
     messageSelectionHint: "Sélectionnez des messages de membres ou des exécutions complètes. Les messages résumés ne peuvent pas être sélectionnés.",

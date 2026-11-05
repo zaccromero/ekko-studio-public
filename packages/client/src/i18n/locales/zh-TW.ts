@@ -3500,6 +3500,9 @@ export default {
 
   // 群聊
   groupChat: {
+    cloudflareOutcomeUnknown: 'Cloudflare 可能已處理此請求，但未收到回覆。系統不會自動重送。',
+    cloudflareReplyReady: 'Cloudflare 已回覆，但聊天室無法儲存回覆。已儲存的回覆可以復原。',
+    cloudflareReplyRefused: 'Cloudflare 未向聊天室傳回回覆。請檢查連線後再試。',
     messageAlreadySummarized: "已被總結，無法刪除",
     messageSummaryBoundaryUnknown: "無法確定總結邊界，暫不可刪除",
     messageSelectionHint: "可選擇成員訊息或整次 Agent 回覆；已總結的訊息不可選擇。",

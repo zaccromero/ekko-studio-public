@@ -3325,6 +3325,9 @@ jobTriggered: 'Job ejecutado',
 
   // Registro de cambios
   groupChat: {
+    cloudflareOutcomeUnknown: 'Cloudflare pudo haber procesado esta solicitud, pero no se recibió la respuesta. No se reenviará automáticamente.',
+    cloudflareReplyReady: 'Cloudflare respondió, pero la sala no pudo guardar la respuesta. La respuesta guardada se puede recuperar.',
+    cloudflareReplyRefused: 'Cloudflare no devolvió una respuesta a la sala. Comprueba la conexión antes de intentarlo de nuevo.',
     messageAlreadySummarized: "Ya resumido; no se puede eliminar",
     messageSummaryBoundaryUnknown: "Límite del resumen no disponible; eliminación deshabilitada",
     messageSelectionHint: "Selecciona mensajes de miembros o ejecuciones completas del agente. No se pueden seleccionar mensajes resumidos.",

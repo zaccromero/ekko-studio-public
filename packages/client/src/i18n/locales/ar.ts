@@ -3539,6 +3539,9 @@ export default {
 
   // Group Chat
   groupChat: {
+    cloudflareOutcomeUnknown: 'ربما عالج Cloudflare هذا الطلب، لكن الرد لم يصل. لن تتم إعادة الإرسال تلقائيًا.',
+    cloudflareReplyReady: 'ردّ Cloudflare، لكن الغرفة لم تتمكن من حفظ الرد. يمكن استعادة الرد المحفوظ.',
+    cloudflareReplyRefused: 'لم يُرجع Cloudflare ردًا إلى الغرفة. تحقّق من الاتصال قبل المحاولة مجددًا.',
     messageAlreadySummarized: "تم تلخيصها بالفعل؛ لا يمكن حذفها",
     messageSummaryBoundaryUnknown: "حد الملخص غير متاح؛ الحذف معطل",
     messageSelectionHint: "حدد رسائل الأعضاء أو عمليات تشغيل الوكيل كاملة. لا يمكن تحديد الرسائل الملخصة.",

@@ -3325,6 +3325,9 @@ jobTriggered: 'Job ausgelost',
 
   // Anderungsprotokoll
   groupChat: {
+    cloudflareOutcomeUnknown: 'Cloudflare hat die Anfrage möglicherweise verarbeitet, aber die Antwort ist nicht eingegangen. Die Anfrage wird nicht automatisch erneut gesendet.',
+    cloudflareReplyReady: 'Cloudflare hat geantwortet, aber der Raum konnte die Antwort nicht speichern. Die gespeicherte Antwort kann wiederhergestellt werden.',
+    cloudflareReplyRefused: 'Cloudflare hat keine Antwort an den Raum geliefert. Prüfe die Verbindung, bevor du es erneut versuchst.',
     messageAlreadySummarized: "Bereits zusammengefasst; Löschen nicht möglich",
     messageSummaryBoundaryUnknown: "Zusammenfassungsgrenze unbekannt; Löschen deaktiviert",
     messageSelectionHint: "Mitgliedernachrichten oder ganze Agentenläufe auswählen. Zusammengefasste Nachrichten können nicht ausgewählt werden.",

@@ -249,6 +249,7 @@ export const useGroupChatStore = defineStore('groupChat', () => {
     const handoffChains = ref<Map<string, RoomAgentHandoffChain>>(new Map())
     const executionQueue = ref<GroupExecutionQueueItem[]>([])
     const messageRoutingDecisions = ref<Map<string, GroupMessageRoutingDecision>>(new Map())
+    const cloudflarePersonalTurnStatus = ref<{ sourceMessageId: string; roomId: string; state: string } | null>(null)
     const autoPlaySpeechEnabled = ref(false)
     const pendingApprovals = ref<Map<string, GroupPendingApproval>>(new Map())
     const pendingClarifies = ref<Map<string, GroupPendingClarify>>(new Map())
@@ -1290,6 +1291,9 @@ export const useGroupChatStore = defineStore('groupChat', () => {
         })
 
         socket.on('message_routing_updated', (decision: GroupMessageRoutingDecision) => { messageRoutingDecisions.value.set(decision.messageId, decision); messageRoutingDecisions.value = new Map(messageRoutingDecisions.value) })
+        socket.on('cloudflare_personal_turn_status', (status: { sourceMessageId: string; roomId: string; state: string }) => {
+            if (status?.roomId === currentRoomId.value && status.sourceMessageId) cloudflarePersonalTurnStatus.value = status
+        })
         socket.on('room_summary_updated', applyRoomSummaryState)
         socket.on('room_summary_review_updated', applyRoomSummaryReview)
 
@@ -2089,6 +2093,7 @@ export const useGroupChatStore = defineStore('groupChat', () => {
         messageDeletionRevisions,
         deleteMessages,
         messageRoutingDecisions,
+        cloudflarePersonalTurnStatus,
         acceptRoutingSuggestion,
         pendingApprovals,
         pendingClarifies,
