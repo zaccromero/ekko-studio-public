@@ -57,8 +57,45 @@ it('accepts only the expected installation, profile, and endpoint origin', () =>
     .toThrow('has expired')
   const codingPolicy = { ...(invitation.catalog.execution_policy as Record<string, unknown>), enabled_toolsets: ['bot_room', 'terminal'] }
   expect(() => selectHermesRoomEndpoint({ ...invitation, catalog: { ...invitation.catalog, execution_policy: codingPolicy } }, expected))
-    .toThrow('planning-only execution policy')
+    .toThrow('limited execution policy')
   const autoApproval = { ...(invitation.catalog.execution_policy as Record<string, unknown>), approval_mode: 'off' }
   expect(() => selectHermesRoomEndpoint({ ...invitation, catalog: { ...invitation.catalog, execution_policy: autoApproval } }, expected))
-    .toThrow('planning-only execution policy')
+    .toThrow('limited execution policy')
+})
+
+it('allows only a pinned agentsystem read-only research toolset alongside bot_room', () => {
+  const expiry = Math.floor(Date.now() / 1000) + 3600
+  const invitation: HermesRoomInvitation = {
+    object: 'hermes.room_member.invitation', grant: 'scoped-grant', target_profile: 'agentsystem',
+    expires_at: expiry, status_expires_at: expiry + 3600,
+    catalog: {
+      installation_id: 'target_123', protocol_versions: [2], text: true,
+      catalog_digest: 'a'.repeat(64),
+      execution_policy: { version: 1, target_profile: 'agentsystem',
+        enabled_toolsets: ['bot_room', 'research-library'], approval_mode: 'manual', policy_digest: 'b'.repeat(64) },
+      endpoint: { available: true, url: 'https://hermes.example/private/', transport_security: 'tls' },
+    },
+  }
+  const expected = { installId: 'target_123', profile: 'agentsystem', origin: 'https://hermes.example',
+    catalogDigest: 'a'.repeat(64), policyDigest: 'b'.repeat(64) }
+  expect(selectHermesRoomEndpoint(invitation, expected)).toMatchObject({
+    catalogDigest: expected.catalogDigest, executionPolicyDigest: expected.policyDigest,
+  })
+  expect(() => selectHermesRoomEndpoint(invitation, { ...expected, policyDigest: undefined }))
+    .toThrow('limited execution policy')
+  expect(() => selectHermesRoomEndpoint(invitation, { ...expected, catalogDigest: undefined }))
+    .toThrow('limited execution policy')
+  const extraTools = { ...(invitation.catalog.execution_policy as Record<string, unknown>),
+    enabled_toolsets: ['bot_room', 'research-library', 'terminal'] }
+  expect(() => selectHermesRoomEndpoint({ ...invitation, catalog: { ...invitation.catalog, execution_policy: extraTools } }, expected))
+    .toThrow('limited execution policy')
+  const reordered = { ...(invitation.catalog.execution_policy as Record<string, unknown>),
+    enabled_toolsets: ['research-library', 'bot_room'] }
+  expect(() => selectHermesRoomEndpoint({ ...invitation, catalog: { ...invitation.catalog, execution_policy: reordered } }, expected))
+    .toThrow('limited execution policy')
+  const otherProfile = { ...invitation, target_profile: 'default', catalog: {
+    ...invitation.catalog, execution_policy: { ...(invitation.catalog.execution_policy as Record<string, unknown>), target_profile: 'default' },
+  } }
+  expect(() => selectHermesRoomEndpoint(otherProfile, { ...expected, profile: 'default' }))
+    .toThrow('limited execution policy')
 })

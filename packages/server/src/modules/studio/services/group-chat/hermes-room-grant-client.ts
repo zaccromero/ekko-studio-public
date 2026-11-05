@@ -52,15 +52,20 @@ export function selectHermesRoomEndpoint(
       || !endpoint || typeof endpoint !== 'object' || Array.isArray(endpoint)) {
     throw new Error('Hermes room catalog does not match the selected target')
   }
-  // Ordinary room publication has no protected project-result verifier. Only a
-  // target-issued, tool-limited planning policy may use this return path.
+  // Ordinary room publication has no protected project-result verifier. The
+  // research exception is restricted to this pinned agentsystem target; its
+  // MCP server must separately register only the approved read-only tools.
   const roomPolicy = policy as Record<string, unknown>
+  const toolsets = roomPolicy.enabled_toolsets
+  const planningOnly = Array.isArray(toolsets)
+    && toolsets.length === 1 && toolsets[0] === 'bot_room'
+  const pinnedResearch = Array.isArray(toolsets)
+    && toolsets.length === 2 && toolsets[0] === 'bot_room' && toolsets[1] === 'research-library'
+    && expected.profile === 'agentsystem' && !!expected.catalogDigest && !!expected.policyDigest
   if (roomPolicy.version !== 1
-      || !Array.isArray(roomPolicy.enabled_toolsets)
-      || roomPolicy.enabled_toolsets.length !== 1
-      || roomPolicy.enabled_toolsets[0] !== 'bot_room'
+      || !(planningOnly || pinnedResearch)
       || roomPolicy.approval_mode !== 'manual') {
-    throw new Error('Hermes hosted room requires a planning-only execution policy')
+    throw new Error('Hermes hosted room requires a pinned, limited execution policy')
   }
   const fields = endpoint as Record<string, unknown>
   const digest = catalog.catalog_digest
