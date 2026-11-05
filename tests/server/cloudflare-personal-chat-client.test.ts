@@ -65,4 +65,25 @@ describe('Cloudflare Personal chat client', () => {
     await expect(client.ask('Question', requestId)).rejects.toMatchObject({ outcome: 'refused' })
     expect(transport).toHaveBeenCalledTimes(1)
   })
+
+  it('reads a confirmed result from the result route without replaying chat', async () => {
+    const transport = vi.fn<typeof fetch>().mockResolvedValueOnce(json(health))
+      .mockResolvedValueOnce(json({ status:'ready', ...result }))
+    const client = new CloudflarePersonalChatClient('https://personal.example/v1/chat', sourceCommit, () => 'secret', transport)
+    await expect(client.readResult('Question',requestId)).resolves.toEqual({ status:'ready',reply:result })
+    expect(transport.mock.calls.map(call => String(call[0]))).toEqual([
+      'https://personal.example/health','https://personal.example/v1/chat/result',
+    ])
+    expect(JSON.parse(String(transport.mock.calls[1][1]?.body))).toEqual({ question:'Question',requested_capabilities:[] })
+  })
+
+  it('keeps pending and mismatched result lookups out of the room', async () => {
+    const transport = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(json(health)).mockResolvedValueOnce(json({ status:'pending',sourceCommit },202))
+      .mockResolvedValueOnce(json(health)).mockResolvedValueOnce(json({ status:'ready',...result,idempotencyKey:crypto.randomUUID() }))
+    const client = new CloudflarePersonalChatClient('https://personal.example/v1/chat', sourceCommit, () => 'secret', transport)
+    await expect(client.readResult('Question',requestId)).resolves.toEqual({ status:'pending' })
+    await expect(client.readResult('Question',requestId)).rejects.toMatchObject({ outcome:'unknown' })
+    expect(transport.mock.calls.every(call => String(call[0]) !== 'https://personal.example/v1/chat')).toBe(true)
+  })
 })

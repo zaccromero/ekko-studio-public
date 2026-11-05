@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  getCloudflarePersonalRecoveryQuestion, recordRecoveredCloudflarePersonalResult,
   getCloudflarePersonalTurn, holdCloudflarePersonalUnknown, installCloudflarePersonalTurnJournal,
   markCloudflarePersonalDispatching, publishCloudflarePersonalRoomTurn,
   recordCloudflarePersonalResult, reserveCloudflarePersonalTurn,
@@ -53,6 +54,23 @@ describe('Cloudflare Personal turn journal', () => {
       sourceMessageId,idempotencyKey,answer:'Late answer',correlationId:'corr-1',
       sourceCommit,cloudflareVersionId:'version-1',
     })).toThrow('not bound to a dispatch')
+  })
+
+  it('recovers only the unchanged owner question and original key', () => {
+    const db = fixture()
+    reserveCloudflarePersonalTurn(db,{ ...input, visibility: 'room' })
+    markCloudflarePersonalDispatching(db,sourceMessageId)
+    holdCloudflarePersonalUnknown(db,sourceMessageId)
+    expect(getCloudflarePersonalRecoveryQuestion(db,sourceMessageId)).toBe('What is the status?')
+    const result = { sourceMessageId,idempotencyKey,answer:'Recovered answer',
+      correlationId:'corr-1',sourceCommit,cloudflareVersionId:'version-1' }
+    expect(() => recordRecoveredCloudflarePersonalResult(db,{ ...result, idempotencyKey: crypto.randomUUID() })).toThrow()
+    db.prepare('UPDATE gc_messages SET content=? WHERE id=?').run('/cloud Changed',sourceMessageId)
+    expect(() => getCloudflarePersonalRecoveryQuestion(db,sourceMessageId)).toThrow('authority changed')
+    db.prepare('UPDATE gc_messages SET content=? WHERE id=?').run('/cloud What is the status?',sourceMessageId)
+    recordRecoveredCloudflarePersonalResult(db,result)
+    expect(getCloudflarePersonalTurn(db,sourceMessageId)).toMatchObject({ state:'ready',answer:'Recovered answer' })
+    expect(() => recordRecoveredCloudflarePersonalResult(db,result)).toThrow()
   })
 
   it('does not reserve a guest or a fabricated source', () => {

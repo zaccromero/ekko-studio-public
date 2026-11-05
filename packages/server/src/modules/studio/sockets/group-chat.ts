@@ -9,9 +9,9 @@ import { consumeHermesHostedPrivateResult, publishHermesHostedRoomResult, type H
 import { HermesHostedRoomCoordinator, HermesHostedRoomPendingError } from '../services/group-chat/hermes-hosted-room-coordinator'
 import { resolveHermesHostedRoomConfig } from '../services/group-chat/hermes-hosted-room-config'
 import { HermesRoomGrantClient } from '../services/group-chat/hermes-room-grant-client'
-import { getCloudflarePersonalTurn, holdCloudflarePersonalUnknown, installCloudflarePersonalTurnJournal,
+import { getCloudflarePersonalRecoveryQuestion, getCloudflarePersonalTurn, holdCloudflarePersonalUnknown, installCloudflarePersonalTurnJournal,
     markCloudflarePersonalDispatching, publishCloudflarePersonalRoomTurn, recordCloudflarePersonalResult,
-    refuseCloudflarePersonalTurn, reserveCloudflarePersonalTurn } from '../services/group-chat/cloudflare-personal-turn-journal'
+    recordRecoveredCloudflarePersonalResult, refuseCloudflarePersonalTurn, reserveCloudflarePersonalTurn } from '../services/group-chat/cloudflare-personal-turn-journal'
 import { CloudflarePersonalChatClient, CloudflarePersonalChatError } from '../services/group-chat/cloudflare-personal-chat-client'
 import { resolveCloudflarePersonalRoomConfig, type CloudflarePersonalRoomConfig } from '../services/group-chat/cloudflare-personal-room-config'
 import { getGroupMessageSelection, deleteGroupMessages, groupMessageDeletionError } from '../repositories/group-message-deletion'
@@ -3695,9 +3695,66 @@ export class GroupChatServer {
                 try { holdCloudflarePersonalUnknown(db, row.sourceMessageId) }
                 catch (error) { logger.warn({ sourceMessageId: row.sourceMessageId, error }, '[GroupChat] Personal cloud interrupted-turn hold failed') }
             }
+            void recoverUnknownCloudflareTurns()
         }, 0)
         recoveryTimer.unref()
+        let cloudRecoveryRunning = false
+        const recoverUnknownCloudflareTurns = async () => {
+            if (cloudRecoveryRunning) return
+            cloudRecoveryRunning = true
+            try {
+                const db = getDb()
+                if (!db) return
+                const ready = db.prepare("SELECT sourceMessageId,roomId FROM gc_cloud_personal_turns WHERE state='ready' AND visibility='room' ORDER BY createdAt LIMIT 100")
+                    .all() as Array<{ sourceMessageId: string; roomId: string }>
+                for (const row of ready) {
+                    try {
+                        let published: ChatMessage | null = null
+                        publishCloudflarePersonalRoomTurn(db, row.sourceMessageId, candidate => {
+                            published = this.storage.saveMessageAndRefreshRoom(candidate).message
+                        })
+                        if (published) {
+                            this.nsp.to(row.roomId).emit('message', buildOutboundGroupMessage(published))
+                            this.notifyGroupReply(row.roomId, published)
+                        }
+                    } catch (error) { logger.warn({ sourceMessageId: row.sourceMessageId, error }, '[GroupChat] Personal cloud ready-result recovery held') }
+                }
+                const rows = db.prepare("SELECT sourceMessageId,roomId,idempotencyKey FROM gc_cloud_personal_turns WHERE state='outcome_unknown' AND visibility='room' ORDER BY createdAt LIMIT 100")
+                    .all() as Array<{ sourceMessageId: string; roomId: string; idempotencyKey: string }>
+                for (const row of rows) {
+                    let binding: CloudflarePersonalRoomConfig | null
+                    try { binding = resolveCloudflarePersonalRoomConfig(row.roomId) }
+                    catch { continue }
+                    if (!binding) continue
+                    try {
+                        const question = getCloudflarePersonalRecoveryQuestion(db, row.sourceMessageId)
+                        const result = await new CloudflarePersonalChatClient(binding.endpointUrl, binding.sourceCommit,
+                            binding.credential).readResult(question, row.idempotencyKey)
+                        if (result.status !== 'ready') continue
+                        recordRecoveredCloudflarePersonalResult(db, { sourceMessageId: row.sourceMessageId,
+                            idempotencyKey: row.idempotencyKey, answer: result.reply.answer,
+                            correlationId: result.reply.correlationId, sourceCommit: result.reply.sourceCommit,
+                            cloudflareVersionId: result.reply.cloudflareVersionId })
+                        let published: ChatMessage | null = null
+                        publishCloudflarePersonalRoomTurn(db, row.sourceMessageId, candidate => {
+                            published = this.storage.saveMessageAndRefreshRoom(candidate).message
+                        })
+                        if (published) {
+                            this.nsp.to(row.roomId).emit('message', buildOutboundGroupMessage(published))
+                            this.notifyGroupReply(row.roomId, published)
+                        }
+                    } catch (error) {
+                        logger.warn({ sourceMessageId: row.sourceMessageId, error }, '[GroupChat] Personal cloud result readback held')
+                    }
+                }
+            } catch (error) {
+                logger.warn({ error }, '[GroupChat] Personal cloud recovery pass held')
+            } finally { cloudRecoveryRunning = false }
+        }
+        const cloudRecoveryTimer = setInterval(() => { void recoverUnknownCloudflareTurns() }, 60_000)
+        cloudRecoveryTimer.unref()
         for (const server of servers) server.once('close', () => clearTimeout(recoveryTimer))
+        for (const server of servers) server.once('close', () => clearInterval(cloudRecoveryTimer))
         for (const server of servers) server.once('close', () => {
             if (this.hostedRoomReconcilerTimer) clearInterval(this.hostedRoomReconcilerTimer)
             this.hostedRoomReconcilerTimer = null

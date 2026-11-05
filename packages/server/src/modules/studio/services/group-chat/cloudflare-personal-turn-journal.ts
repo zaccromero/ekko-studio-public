@@ -127,6 +127,40 @@ export function recordCloudflarePersonalResult(db: DatabaseSync, input: {
   })
 }
 
+/** Recover a confirmed remote result without dispatching the original question again. */
+export function recordRecoveredCloudflarePersonalResult(db: DatabaseSync, input: {
+  sourceMessageId: string; idempotencyKey: string; answer: string
+  correlationId: string; sourceCommit: string; cloudflareVersionId: string
+}): void {
+  if (!input.answer || input.answer.length > 100_000 || !input.correlationId
+      || !input.cloudflareVersionId || !/^[a-f0-9]{40}$/.test(input.sourceCommit)) {
+    throw new Error('Invalid recovered Personal cloud result')
+  }
+  transaction(db, () => {
+    const row = getCloudflarePersonalTurn(db, input.sourceMessageId)
+    if (!row || row.state !== 'outcome_unknown' || row.idempotencyKey !== input.idempotencyKey) {
+      throw new Error('Personal cloud recovery is not bound to an unknown turn')
+    }
+    assertSource(db, row)
+    db.prepare(`UPDATE gc_cloud_personal_turns SET state='ready',answer=?,correlationId=?,
+      sourceCommit=?,cloudflareVersionId=?,updatedAt=? WHERE sourceMessageId=?`).run(
+      input.answer,input.correlationId,input.sourceCommit,input.cloudflareVersionId,Date.now(),input.sourceMessageId,
+    )
+  })
+}
+
+/** Read the original, unchanged owner question for a result-only recovery request. */
+export function getCloudflarePersonalRecoveryQuestion(db: DatabaseSync, sourceMessageId: string): string {
+  const row = getCloudflarePersonalTurn(db, sourceMessageId)
+  if (!row || row.state !== 'outcome_unknown') throw new Error('Personal cloud turn is not awaiting recovery')
+  assertSource(db, row)
+  const source = db.prepare('SELECT content FROM gc_messages WHERE id=?').get(sourceMessageId) as { content: string }
+  const match = /^\/cloud(?:\s+([\s\S]*))?$/i.exec(source.content.trim())
+  const question = (match?.[1] || '').trim()
+  if (!question || question.length > 4_000) throw new Error('Personal cloud recovery question is invalid')
+  return question
+}
+
 /** Never retry a dispatching turn after restart or an ambiguous transport failure. */
 export function holdCloudflarePersonalUnknown(db: DatabaseSync, sourceMessageId: string): void {
   transaction(db, () => {
