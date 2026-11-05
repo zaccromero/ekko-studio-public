@@ -46,6 +46,24 @@ it('persists one queue-bound VM intent, admission and terminal state', () => {
   } finally { db.close() }
 })
 
+it('adds public delivery mode to an existing hosted-run table without changing old rows', () => {
+  const db = new DatabaseSync(':memory:')
+  try {
+    db.exec(`CREATE TABLE gc_hermes_hosted_room_runs (
+      queueId TEXT PRIMARY KEY, roomId TEXT, messageId TEXT, targetAgentId TEXT,
+      taskId TEXT, generation INTEGER, sourceEventSeq INTEGER, promptDigest TEXT,
+      scopeJson TEXT, ownerAuthUserId INTEGER, requesterMemberId TEXT, sourceDigest TEXT,
+      agentOwnerMemberId TEXT, runId TEXT, terminalJson TEXT, publishedMessageId TEXT,
+      publishedAt INTEGER, state TEXT, createdAt INTEGER, updatedAt INTEGER
+    );`)
+    db.prepare(`INSERT INTO gc_hermes_hosted_room_runs (queueId,state) VALUES ('old_run','completed')`).run()
+    installHermesHostedRoomLedger(db)
+    expect(db.prepare(`SELECT deliveryMode,state FROM gc_hermes_hosted_room_runs WHERE queueId='old_run'`).get())
+      .toMatchObject({ deliveryMode: 'public', state: 'completed' })
+    installHermesHostedRoomLedger(db)
+  } finally { db.close() }
+})
+
 it('keeps ambiguous admission and changed queue bindings from becoming a second run', () => {
   const { db, input } = fixture()
   try {

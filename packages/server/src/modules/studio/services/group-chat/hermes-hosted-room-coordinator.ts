@@ -41,6 +41,7 @@ export class HermesHostedRoomCoordinator {
     task: HermesRoomTask
     maxWaitMs?: number
     pollIntervalMs?: number
+    privateDelivery?: boolean
   }): Promise<HermesRunStatus> {
     if (input.task.taskId !== input.queueId) throw new Error('Hermes hosted-room task ID must be the queue ID')
     validateReadbackLimits(input.maxWaitMs, input.pollIntervalMs)
@@ -59,7 +60,7 @@ export class HermesHostedRoomCoordinator {
       sourceEventSeq: input.task.sourceEventSeq,
       promptDigest: bound.dispatch.prompt_digest,
       scopeJson: JSON.stringify({ identity: input.identity, target: input.target }),
-    }, true)
+    }, true, input.privateDelivery ? 'private' : 'public')
     const client = new HermesRunApiClient(bound.endpointUrl, () => bound.grant, this.transport)
     let admission: HermesRunAdmission
     try {

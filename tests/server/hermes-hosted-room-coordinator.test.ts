@@ -68,6 +68,24 @@ it('submits once after durable intent and stores a matching VM terminal receipt'
   } finally { db.close() }
 })
 
+it('pins private delivery before submitting an allone VM contribution', async () => {
+  const db = dbFixture()
+  try {
+    const transport = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(json(invitation, 201))
+      .mockResolvedValueOnce(json({ run_id: 'run_123', status: 'queued' }, 202))
+      .mockResolvedValueOnce(json({ object: 'hermes.run', run_id: 'run_123', status: 'completed', output: 'private answer' }))
+    const coordinator = new HermesHostedRoomCoordinator(db,
+      new HermesRoomGrantClient('https://hermes.example/private/', () => 'bootstrap', transport), transport)
+    expect((await coordinator.executeAndWait({ ...input, privateDelivery: true })).output).toBe('private answer')
+    expect(getHermesHostedRoomRun(db, input.queueId)).toMatchObject({
+      state: 'completed', deliveryMode: 'private', publishedMessageId: null,
+    })
+    await expect(coordinator.executeAndWait(input)).rejects.toThrow('already reserved')
+    expect(transport).toHaveBeenCalledTimes(3)
+  } finally { db.close() }
+})
+
 it('retains unknown admission and does not retry a lost submission', async () => {
   const db = dbFixture()
   try {

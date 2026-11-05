@@ -4,9 +4,9 @@ import {
   installHermesHostedRoomLedger, recordHermesRunAdmission, recordHermesRunTerminal,
   reserveHermesHostedRoomRun,
 } from '../../packages/server/src/modules/studio/services/group-chat/hermes-hosted-room-ledger'
-import { publishHermesHostedRoomResult } from '../../packages/server/src/modules/studio/services/group-chat/hermes-hosted-room-publication'
+import { consumeHermesHostedPrivateResult, publishHermesHostedRoomResult } from '../../packages/server/src/modules/studio/services/group-chat/hermes-hosted-room-publication'
 
-function fixture() {
+function fixture(privateDelivery = false) {
   const db = new DatabaseSync(':memory:')
   db.exec(`CREATE TABLE gc_execution_queue (
     id TEXT PRIMARY KEY, roomId TEXT, messageId TEXT, targetAgentId TEXT,
@@ -30,7 +30,7 @@ function fixture() {
     queueId: 'queue_123', roomId: 'room_123', messageId: 'message_123', targetAgentId: 'agent_123',
     taskId: 'queue_123', generation: 1, sourceEventSeq: 7,
     promptDigest: 'a'.repeat(64), scopeJson: '{}',
-  })
+  }, false, privateDelivery ? 'private' : 'public')
   recordHermesRunAdmission(db, 'queue_123', 'run_123')
   recordHermesRunTerminal(db, 'queue_123', 'run_123', 'completed', {
     object: 'hermes.run', run_id: 'run_123', status: 'completed', output: 'A concrete plan',
@@ -43,6 +43,31 @@ function fixture() {
   const notify = vi.fn()
   return { db, persist, notify }
 }
+
+it('captures a hosted allone answer once without a public Hermes message', () => {
+  const { db, persist, notify } = fixture(true)
+  try {
+    expect(() => publishHermesHostedRoomResult({ db, queueId: 'queue_123', persist, notify }))
+      .toThrow('not terminal')
+    expect(consumeHermesHostedPrivateResult(db, 'queue_123')).toBe('A concrete plan')
+    expect(() => consumeHermesHostedPrivateResult(db, 'queue_123')).toThrow('not available')
+    expect(db.prepare(`SELECT status FROM gc_execution_queue WHERE id='queue_123'`).get())
+      .toMatchObject({ status: 'completed' })
+    expect(db.prepare(`SELECT id FROM gc_messages WHERE id LIKE 'gcvm_%'`).get()).toBeUndefined()
+    expect(persist).not.toHaveBeenCalled()
+    expect(notify).not.toHaveBeenCalled()
+  } finally { db.close() }
+})
+
+it('holds a private VM result when source authority changes', () => {
+  const { db } = fixture(true)
+  try {
+    db.prepare(`UPDATE gc_messages SET content='changed' WHERE id='message_123'`).run()
+    expect(() => consumeHermesHostedPrivateResult(db, 'queue_123')).toThrow('authority changed')
+    expect(db.prepare(`SELECT status FROM gc_execution_queue WHERE id='queue_123'`).get())
+      .toMatchObject({ status: 'running' })
+  } finally { db.close() }
+})
 
 it('publishes one verified VM reply and retains its marker across repeated readback', () => {
   const { db, persist, notify } = fixture()

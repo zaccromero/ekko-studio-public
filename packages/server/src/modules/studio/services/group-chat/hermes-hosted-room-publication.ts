@@ -16,6 +16,47 @@ export type HostedRoomMessage = {
   mentions: []
 }
 
+/** Consume a private @allone VM result without publishing it into room history. */
+export function consumeHermesHostedPrivateResult(db: DatabaseSync, queueId: string): string {
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    const run = getHermesHostedRoomRun(db, queueId)
+    if (!run || run.deliveryMode !== 'private' || run.state !== 'completed' || !run.runId
+        || !run.terminalJson || run.publishedAt !== null || run.publishedMessageId !== null) {
+      throw new Error('Hermes private result is not available for capture')
+    }
+    const room = db.prepare('SELECT ownerAuthUserId FROM gc_rooms WHERE id=?').get(run.roomId) as Record<string, unknown> | undefined
+    const queue = db.prepare(`SELECT roomId,messageId,targetAgentId,requesterMemberId,sequence,status
+      FROM gc_execution_queue WHERE id=?`).get(queueId) as Record<string, unknown> | undefined
+    const source = db.prepare('SELECT roomId,senderId,role,content FROM gc_messages WHERE id=?')
+      .get(run.messageId) as Record<string, unknown> | undefined
+    const agent = db.prepare('SELECT removedAt,ownerMemberId FROM gc_room_agents WHERE roomId=? AND agentId=?')
+      .get(run.roomId, run.targetAgentId) as Record<string, unknown> | undefined
+    if (Number(room?.ownerAuthUserId) !== run.ownerAuthUserId || queue?.roomId !== run.roomId
+        || queue.messageId !== run.messageId || queue.targetAgentId !== run.targetAgentId
+        || queue.requesterMemberId !== run.requesterMemberId || queue.sequence !== run.sourceEventSeq
+        || queue.status !== 'running' || source?.roomId !== run.roomId
+        || source.senderId !== run.requesterMemberId || source.role !== 'user'
+        || typeof source.content !== 'string'
+        || createHash('sha256').update(source.content).digest('hex') !== run.sourceDigest
+        || !agent || agent.removedAt !== 0 || String(agent.ownerMemberId || '') !== run.agentOwnerMemberId) {
+      throw new Error('Hermes private result authority changed')
+    }
+    const terminal: unknown = JSON.parse(run.terminalJson)
+    if (!hasHermesCompleteTextReply(terminal) || terminal.run_id !== run.runId) {
+      throw new Error('Hermes private result has no complete text reply')
+    }
+    const now = Date.now()
+    const consumed = db.prepare(`UPDATE gc_hermes_hosted_room_runs SET publishedAt=?,updatedAt=?
+      WHERE queueId=? AND deliveryMode='private' AND publishedAt IS NULL`).run(now, now, queueId)
+    const completed = db.prepare(`UPDATE gc_execution_queue SET status='completed',finishedAt=?,lastError=NULL
+      WHERE id=? AND status='running'`).run(now, queueId)
+    if (consumed.changes !== 1 || completed.changes !== 1) throw new Error('Hermes private result consumption changed')
+    db.exec('COMMIT')
+    return terminal.output
+  } catch (error) { db.exec('ROLLBACK'); throw error }
+}
+
 /** One transaction checks present authority, inserts the result, and marks delivery. */
 export function publishHermesHostedRoomResult(options: {
   db: DatabaseSync
@@ -29,7 +70,7 @@ export function publishHermesHostedRoomResult(options: {
   db.exec('BEGIN IMMEDIATE')
   try {
     const run = getHermesHostedRoomRun(db, queueId)
-    if (!run || run.state !== 'completed' || !run.runId || !run.terminalJson) {
+    if (!run || run.deliveryMode !== 'public' || run.state !== 'completed' || !run.runId || !run.terminalJson) {
       throw new Error('Hermes hosted-room result is not terminal')
     }
     const room = db.prepare('SELECT ownerAuthUserId FROM gc_rooms WHERE id=?').get(run.roomId) as Record<string, unknown> | undefined

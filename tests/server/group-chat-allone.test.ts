@@ -71,6 +71,18 @@ describe('@allone mention parsing', () => {
 })
 
 describe('@allone team answer', () => {
+  it('includes a private-capable hosted contributor and uses a local merger', async () => {
+    const hosted = { ...fakeAgent('hermes', 'Hermes', answer('VM agrees.')), requiresDurableQueue: true }
+    const codex = fakeAgent('codex', 'Codex', (msg: any) => {
+      msg.privateCapture.texts.push(msg.content.startsWith('[Merge') ? 'Merged with Hermes.' : 'Local answer.')
+    })
+    const h = setup([hosted, codex], 'hermes')
+    await expect(h.message('@allone plan this')).resolves.toMatchObject({ targetCount: 2, deliveredCount: 1 })
+    expect(hosted.replyToMention).toHaveBeenCalledTimes(1)
+    expect(codex.replyToMention).toHaveBeenCalledTimes(2)
+    expect(codex.replyToMention.mock.calls[1][1].content).toContain('VM agrees.')
+  })
+
   it('collects every contribution privately and posts exactly one merged reply from the default Agent', async () => {
     const codex = fakeAgent('codex', 'Codex', answer('Use Postgres.'))
     const claude = fakeAgent('claude', 'Claude', answer('Use SQLite.'))

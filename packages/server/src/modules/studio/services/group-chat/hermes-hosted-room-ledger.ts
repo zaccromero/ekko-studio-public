@@ -19,6 +19,7 @@ export type HermesHostedRoomRun = {
   terminalJson: string | null
   publishedMessageId: string | null
   publishedAt: number | null
+  deliveryMode: 'public' | 'private'
   state: 'reserved' | 'admission_unknown' | 'admitted' | 'completed' | 'failed'
   createdAt: number
   updatedAt: number
@@ -36,6 +37,7 @@ export function installHermesHostedRoomLedger(db: DatabaseSync): void {
     ownerAuthUserId INTEGER NOT NULL, requesterMemberId TEXT NOT NULL,
     sourceDigest TEXT NOT NULL, agentOwnerMemberId TEXT NOT NULL,
     runId TEXT, terminalJson TEXT, publishedMessageId TEXT, publishedAt INTEGER,
+    deliveryMode TEXT NOT NULL DEFAULT 'public' CHECK(deliveryMode IN ('public','private')),
     state TEXT NOT NULL CHECK(state IN
       ('reserved','admission_unknown','admitted','completed','failed')),
     createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL
@@ -44,6 +46,10 @@ export function installHermesHostedRoomLedger(db: DatabaseSync): void {
     ON gc_hermes_hosted_room_runs(taskId,generation);
   CREATE UNIQUE INDEX IF NOT EXISTS idx_gc_hermes_hosted_run_id
     ON gc_hermes_hosted_room_runs(runId) WHERE runId IS NOT NULL;`)
+  const columns = db.prepare('PRAGMA table_info(gc_hermes_hosted_room_runs)').all() as Array<{ name: string }>
+  if (!columns.some(column => column.name === 'deliveryMode')) {
+    db.exec("ALTER TABLE gc_hermes_hosted_room_runs ADD COLUMN deliveryMode TEXT NOT NULL DEFAULT 'public' CHECK(deliveryMode IN ('public','private'))")
+  }
 }
 
 export function getHermesHostedRoomRun(db: DatabaseSync, queueId: string): HermesHostedRoomRun | null {
@@ -56,8 +62,9 @@ export function reserveHermesHostedRoomRun(
   db: DatabaseSync,
   input: Omit<HermesHostedRoomRun,
     'ownerAuthUserId' | 'requesterMemberId' | 'sourceDigest' | 'agentOwnerMemberId'
-    | 'runId' | 'terminalJson' | 'publishedMessageId' | 'publishedAt' | 'state' | 'createdAt' | 'updatedAt'>,
+    | 'runId' | 'terminalJson' | 'publishedMessageId' | 'publishedAt' | 'deliveryMode' | 'state' | 'createdAt' | 'updatedAt'>,
   newSubmissionOnly = false,
+  deliveryMode: 'public' | 'private' = 'public',
 ): HermesHostedRoomRun {
   if (![input.queueId, input.roomId, input.messageId, input.targetAgentId, input.taskId].every(value => identifier.test(value))
       || input.taskId !== input.queueId
@@ -101,7 +108,7 @@ export function reserveHermesHostedRoomRun(
       if (Object.entries(input).some(([key, value]) => row![key as keyof HermesHostedRoomRun] !== value)) {
         throw new Error('Hermes hosted-room reservation changed')
       }
-      if (row.ownerAuthUserId !== ownerAuthUserId || row.requesterMemberId !== requesterMemberId
+      if (row.deliveryMode !== deliveryMode || row.ownerAuthUserId !== ownerAuthUserId || row.requesterMemberId !== requesterMemberId
           || row.sourceDigest !== sourceDigest || row.agentOwnerMemberId !== agentOwnerMemberId) {
         throw new Error('Hermes hosted-room authority changed')
       }
@@ -111,11 +118,11 @@ export function reserveHermesHostedRoomRun(
       db.prepare(`INSERT INTO gc_hermes_hosted_room_runs
         (queueId,roomId,messageId,targetAgentId,taskId,generation,sourceEventSeq,promptDigest,scopeJson,
          ownerAuthUserId,requesterMemberId,sourceDigest,agentOwnerMemberId,runId,terminalJson,
-         publishedMessageId,publishedAt,state,createdAt,updatedAt)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,NULL,NULL,NULL,'reserved',?,?)`).run(
+         publishedMessageId,publishedAt,deliveryMode,state,createdAt,updatedAt)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,NULL,NULL,NULL,?,'reserved',?,?)`).run(
         input.queueId, input.roomId, input.messageId, input.targetAgentId, input.taskId,
         input.generation, input.sourceEventSeq, input.promptDigest, input.scopeJson,
-        ownerAuthUserId, requesterMemberId, sourceDigest, agentOwnerMemberId, now, now,
+        ownerAuthUserId, requesterMemberId, sourceDigest, agentOwnerMemberId, deliveryMode, now, now,
       )
       row = getHermesHostedRoomRun(db, input.queueId)
     }

@@ -4219,7 +4219,7 @@ export class GroupChatServer {
         try {
             const rows = db.prepare(`SELECT queueId,roomId,targetAgentId,state
                 FROM gc_hermes_hosted_room_runs
-                WHERE state IN ('admitted','completed') AND publishedMessageId IS NULL
+                WHERE state IN ('admitted','completed') AND publishedMessageId IS NULL AND deliveryMode='public'
                 ORDER BY createdAt ASC LIMIT 25`).all() as Array<{
                     queueId: string; roomId: string; targetAgentId: string; state: string
                 }>

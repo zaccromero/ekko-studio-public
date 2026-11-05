@@ -51,6 +51,7 @@ import { HermesHostedRoomCoordinator } from './hermes-hosted-room-coordinator'
 import { resolveHermesHostedRoomConfig, type HermesHostedRoomConfig } from './hermes-hosted-room-config'
 import { HermesRoomGrantClient } from './hermes-room-grant-client'
 import { hasHermesCompleteTextReply } from './hermes-run-api-client'
+import { consumeHermesHostedPrivateResult } from './hermes-hosted-room-publication'
 
 export const GROUP_CHAT_AGENT_SOCKET_SECRET = randomBytes(32).toString('hex')
 
@@ -100,7 +101,7 @@ export type MentionMessage = {
     continuationAttemptId?: string
     /** Trusted, target-specific ownership context added by AgentClients. */
     targetOwnerMemberId?: string
-    /** In-memory @allone sink: the run's room output is collected here instead of posted. Never persisted. */
+    /** @allone sink: local output stays in memory; hosted output is held in its scoped VM ledger, never posted as a room message. */
     privateCapture?: PrivateReplyCapture
 }
 
@@ -386,7 +387,7 @@ export interface GroupChatRunService {
 export class AgentClient implements GroupAgentExecutor {
     get projectInvocationBoundary(): true | undefined { return this.hostedRoom ? undefined : true }
     readonly agentId: string
-    get supportsPrivateCapture(): boolean { return this.hostedRoom === null }
+    get supportsPrivateCapture(): boolean { return true }
     get requiresDurableQueue(): true | undefined { return this.hostedRoom ? true : undefined }
     readonly agent: 'hermes' | 'ekko' | 'codex' | 'claude' | 'pi' | 'grok' | 'opencode' | 'dsh' | 'cursor' | 'antigravity' | 'qwen' | 'kimi' | 'codebuddy' | 'qoder' | 'copilot' | 'zcode'
     readonly agentMode: 'scoped' | 'global'
@@ -1557,6 +1558,7 @@ export class AgentClient implements GroupAgentExecutor {
         runtimeContext: GroupRuntimeContext,
         invocation: { queueId: string; sequence: number } | undefined,
         onStatus?: (status: 'compressing' | 'replying' | 'ready', extra?: Record<string, unknown>) => void,
+        privateCapture?: PrivateReplyCapture,
     ): Promise<void> {
         const config = this.hostedRoom
         if (!config || config.roomId !== roomId || !invocation || !msg.messageId
@@ -1604,6 +1606,7 @@ export class AgentClient implements GroupAgentExecutor {
         this.activeSessions.set(roomId, sessionId)
         onStatus?.('replying', { agentSessionId: sessionId })
         try {
+            if (privateCapture) privateCapture.launchedAt = Date.now()
             const grantClient = new HermesRoomGrantClient(config.bootstrapUrl, config.credential)
             const coordinator = new HermesHostedRoomCoordinator(db, grantClient)
             const status = await coordinator.executeAndWait({
@@ -1620,12 +1623,17 @@ export class AgentClient implements GroupAgentExecutor {
                     prompt,
                     traceId: randomUUID(),
                 },
+                privateDelivery: !!privateCapture,
             })
             if (!hasHermesCompleteTextReply(status)) {
                 throw new Error('Hermes VM run returned no complete text reply')
             }
-            if (!this.storage?.publishHostedResult) throw new Error('Hermes VM result publisher is unavailable')
-            this.storage.publishHostedResult(invocation.queueId)
+            if (privateCapture) {
+                privateCapture.texts.push(consumeHermesHostedPrivateResult(db, invocation.queueId))
+            } else {
+                if (!this.storage?.publishHostedResult) throw new Error('Hermes VM result publisher is unavailable')
+                this.storage.publishHostedResult(invocation.queueId)
+            }
         } finally {
             if (this.activeSessions.get(roomId) === sessionId) this.activeSessions.delete(roomId)
             onStatus?.('ready', { agentSessionId: sessionId })
@@ -1643,6 +1651,12 @@ export class AgentClient implements GroupAgentExecutor {
         if (msg.privateCapture) {
             const capture = msg.privateCapture
             capture.startedAt ||= Date.now()
+            if (this.hostedRoom?.roomId === roomId) {
+                try {
+                    await this.replyToHostedHermes(roomId, msg, runtimeContext, invocation, onStatus, capture)
+                } finally { capture.finishedAt = Date.now() }
+                return
+            }
             this.privateCaptures.set(roomId, capture)
             try {
                 await this.replyToMention(roomId, { ...msg, privateCapture: undefined }, runtimeContext, onStatus)
@@ -3231,7 +3245,10 @@ export class AgentClients {
         const askedAt = Date.now()
         const defaultAgentId = String(this._storage?.getRoom?.(roomId)?.defaultAgentId || '')
         const question = stripMentionRoutingTokens(msg.content, '') || msg.content
-        const preferred = contributors.find(agent => agent.agentId === defaultAgentId) || contributors[0]
+        // The merge is synthetic and has no persisted source message. Hosted runs
+        // require a source-bound durable queue, so a local contributor must merge.
+        const localContributors = contributors.filter(agent => agent.requiresDurableQueue !== true)
+        const preferred = localContributors.find(agent => agent.agentId === defaultAgentId) || localContributors[0] || contributors[0]
         const timeoutMs = allOneTimeoutMs()
 
         const captures = new Map(contributors.map(agent => [agent.agentId, { texts: [], error: null } as PrivateReplyCapture]))
@@ -3273,9 +3290,9 @@ export class AgentClients {
         // A synthesizer that is still running its contribution would queue
         // behind itself, so prefer one whose contribution finished.
         const answered = new Set(contributions.filter(c => !c.failure).map(c => c.agentName))
-        const synthesizer = answered.has(preferred.name)
+        const synthesizer = answered.has(preferred.name) && preferred.requiresDurableQueue !== true
             ? preferred
-            : contributors.find(agent => answered.has(agent.name) && agent.connected) || null
+            : localContributors.find(agent => answered.has(agent.name) && agent.connected) || null
         let reply = ''
         let fallbackReason = synthesizer ? '' : 'no Agent answered'
         if (synthesizer) {
