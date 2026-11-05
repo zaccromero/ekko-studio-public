@@ -286,6 +286,10 @@ describe('group chat baseline behavior', () => {
       roomId: 'room-1',
       content: '@all guest broadcast',
     })
+    const deniedSlash = await emitAck<any>(guest, 'message', {
+      roomId: 'room-1',
+      content: '/allone guest team request',
+    })
     const allowed = await emitAck<any>(owner, 'message', {
       roomId: 'room-1',
       content: '@all owner broadcast',
@@ -294,6 +298,10 @@ describe('group chat baseline behavior', () => {
     expect(denied).toEqual({
       code: 'GROUP_CHAT_ALL_MENTION_FORBIDDEN',
       error: 'Only the room owner can mention @all',
+    })
+    expect(deniedSlash).toEqual({
+      code: 'GROUP_CHAT_ALL_MENTION_FORBIDDEN',
+      error: 'Only the room owner can mention @allone',
     })
     expect(allowed.id).toEqual(expect.any(String))
     expect(storage.getRecentMessagesForUI('room-1').map(message => message.content))

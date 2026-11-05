@@ -12,6 +12,7 @@ import {
   isReservedMentionName,
   neutralizeMentions,
   resolveMentionTargets,
+  stripMentionRoutingTokens,
 } from '../../packages/server/src/modules/studio/services/group-chat/mention-routing'
 
 type FakeAgent = {
@@ -54,11 +55,17 @@ function setup(agents: FakeAgent[], defaultAgentId = '') {
 describe('@allone mention parsing', () => {
   it('is distinct from @all and reserved as an Agent name', () => {
     expect(isAllOneMentioned('@allone compare these')).toBe(true)
+    expect(isAllOneMentioned('/allone compare these')).toBe(true)
+    expect(isAllOneMentioned(' /ALLONE compare these')).toBe(true)
+    expect(isAllOneMentioned('/allone')).toBe(false)
+    expect(isAllOneMentioned('Please /allone compare these')).toBe(false)
     expect(isAllAgentsMentioned('@allone compare these')).toBe(false)
     expect(isAllOneMentioned('@all compare these')).toBe(false)
     expect(isAllOneMentioned('mail me at x@allone.dev')).toBe(false)
     expect(hasMentionSyntax('@allone compare these')).toBe(true)
     expect(isReservedMentionName('AllOne')).toBe(true)
+    expect(stripMentionRoutingTokens('/allone compare these', '')).toBe('compare these')
+    expect(stripMentionRoutingTokens('/allone ask @Codex and @allone', 'Codex')).toBe('ask and')
     expect(resolveMentionTargets([{ name: 'Codex', agentId: 'codex' }], '@allone hi', 'human')).toEqual([])
   })
 
@@ -71,6 +78,14 @@ describe('@allone mention parsing', () => {
 })
 
 describe('@allone team answer', () => {
+  it('routes a leading /allone question through the same private team path', async () => {
+    const codex = fakeAgent('codex', 'Codex', answer('A bounded answer.'))
+    const h = setup([codex], 'codex')
+    await expect(h.message('/allone plan the next check')).resolves.toMatchObject({ targetCount: 1, deliveredCount: 1 })
+    expect(codex.replyToMention).toHaveBeenCalledTimes(2)
+    expect(codex.replyToMention.mock.calls[0][1].content).toContain('plan the next check')
+    expect(codex.replyToMention.mock.calls[0][1].content).not.toContain('/allone')
+  })
   it('includes a private-capable hosted contributor and uses a local merger', async () => {
     const hosted = { ...fakeAgent('hermes', 'Hermes', answer('VM agrees.')), requiresDurableQueue: true }
     const codex = fakeAgent('codex', 'Codex', (msg: any) => {

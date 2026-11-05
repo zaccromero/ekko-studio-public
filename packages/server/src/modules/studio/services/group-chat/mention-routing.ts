@@ -77,7 +77,7 @@ export function isAllAgentsMentioned(content: string): boolean {
 }
 
 export function isAllOneMentioned(content: string): boolean {
-    return isAgentMentioned(content, ALL_ONE_MENTION)
+    return isAgentMentioned(content, ALL_ONE_MENTION) || /^\s*\/allone\s+\S/i.test(content)
 }
 
 export function hasMentionSyntax(content: string): boolean {
@@ -147,6 +147,7 @@ export function stripMentionRoutingTokens(content: string, ownAgentName: string)
     for (const range of ranges) {
         result = `${result.slice(0, range.start)}${result.slice(range.end)}`
     }
+    result = result.replace(/^\s*\/allone\s+(?=\S)/i, '')
 
     return result
         .replace(/^[\s,，:：;；.!?。！？]+/, '')

@@ -79,6 +79,7 @@ describe('Ekko built-in skills', () => {
       .sort()
     expect(names).toEqual([
       '1password',
+      'allone',
       'apple-notes',
       'apple-reminders',
       'document-to-action-items',
