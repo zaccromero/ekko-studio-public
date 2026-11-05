@@ -90,9 +90,17 @@ export function deleteGroupMessages(roomId: string, messageIds: unknown, history
       selected.add(group)
     }
     const deletedIds = [...selected].flatMap(group => group.messageIds)
+    const hasAllOneJournal = Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='gc_allone_journal'").get())
     for (const id of deletedIds) {
       const changes = db.prepare('SELECT change_id FROM workspace_run_changes WHERE room_id = ? AND message_id = ?').all(roomId, id) as Array<{ change_id: string }>
       deleteWorkspaceRunChangesByChangeIds(db, changes.map(change => change.change_id))
+      if (hasAllOneJournal) {
+        db.prepare(`DELETE FROM gc_allone_contributions WHERE messageId IN
+          (SELECT messageId FROM gc_allone_journal WHERE roomId=? AND (messageId=? OR publishedMessageId=?))`)
+          .run(roomId, id, id)
+        db.prepare('DELETE FROM gc_allone_journal WHERE roomId=? AND (messageId=? OR publishedMessageId=?)')
+          .run(roomId, id, id)
+      }
       for (const table of ['gc_message_routing_claims', 'gc_message_routing_decisions', 'gc_message_routing_contexts', 'gc_execution_queue']) {
         db.prepare(`DELETE FROM ${table} WHERE roomId = ? AND messageId = ?`).run(roomId, id)
       }

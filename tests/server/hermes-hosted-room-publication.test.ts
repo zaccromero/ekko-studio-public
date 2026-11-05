@@ -59,6 +59,24 @@ it('captures a hosted allone answer once without a public Hermes message', () =>
   } finally { db.close() }
 })
 
+it('consumes a private VM terminal after the exact Studio restart queue failure', () => {
+  const { db } = fixture(true)
+  try {
+    db.prepare("UPDATE gc_execution_queue SET status='failed',lastError='Studio restarted while work was running' WHERE id='queue_123'").run()
+    expect(consumeHermesHostedPrivateResult(db, 'queue_123')).toBe('A concrete plan')
+    expect(db.prepare("SELECT status,lastError FROM gc_execution_queue WHERE id='queue_123'").get())
+      .toMatchObject({ status: 'completed', lastError: null })
+  } finally { db.close() }
+})
+
+it('holds a private VM terminal after an unrelated queue failure', () => {
+  const { db } = fixture(true)
+  try {
+    db.prepare("UPDATE gc_execution_queue SET status='failed',lastError='Denied by owner' WHERE id='queue_123'").run()
+    expect(() => consumeHermesHostedPrivateResult(db, 'queue_123')).toThrow('authority changed')
+  } finally { db.close() }
+})
+
 it('holds a private VM result when source authority changes', () => {
   const { db } = fixture(true)
   try {

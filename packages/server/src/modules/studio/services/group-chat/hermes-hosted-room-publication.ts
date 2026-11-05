@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
 import { getHermesHostedRoomRun } from './hermes-hosted-room-ledger'
 import { hasHermesCompleteTextReply } from './hermes-run-api-client'
+import { getAllOneJournal, recordAllOneContributionInTransaction } from './allone-journal'
 
 export type HostedRoomMessage = {
   id: string
@@ -26,16 +27,17 @@ export function consumeHermesHostedPrivateResult(db: DatabaseSync, queueId: stri
       throw new Error('Hermes private result is not available for capture')
     }
     const room = db.prepare('SELECT ownerAuthUserId FROM gc_rooms WHERE id=?').get(run.roomId) as Record<string, unknown> | undefined
-    const queue = db.prepare(`SELECT roomId,messageId,targetAgentId,requesterMemberId,sequence,status
+    const queue = db.prepare(`SELECT roomId,messageId,targetAgentId,requesterMemberId,sequence,status,lastError
       FROM gc_execution_queue WHERE id=?`).get(queueId) as Record<string, unknown> | undefined
     const source = db.prepare('SELECT roomId,senderId,role,content FROM gc_messages WHERE id=?')
       .get(run.messageId) as Record<string, unknown> | undefined
-    const agent = db.prepare('SELECT removedAt,ownerMemberId FROM gc_room_agents WHERE roomId=? AND agentId=?')
+    const agent = db.prepare('SELECT name,removedAt,ownerMemberId FROM gc_room_agents WHERE roomId=? AND agentId=?')
       .get(run.roomId, run.targetAgentId) as Record<string, unknown> | undefined
     if (Number(room?.ownerAuthUserId) !== run.ownerAuthUserId || queue?.roomId !== run.roomId
         || queue.messageId !== run.messageId || queue.targetAgentId !== run.targetAgentId
         || queue.requesterMemberId !== run.requesterMemberId || queue.sequence !== run.sourceEventSeq
-        || queue.status !== 'running' || source?.roomId !== run.roomId
+        || !(queue.status === 'running' || (queue.status === 'failed'
+          && queue.lastError === 'Studio restarted while work was running')) || source?.roomId !== run.roomId
         || source.senderId !== run.requesterMemberId || source.role !== 'user'
         || typeof source.content !== 'string'
         || createHash('sha256').update(source.content).digest('hex') !== run.sourceDigest
@@ -47,10 +49,18 @@ export function consumeHermesHostedPrivateResult(db: DatabaseSync, queueId: stri
       throw new Error('Hermes private result has no complete text reply')
     }
     const now = Date.now()
+    const journalInstalled = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='gc_allone_journal'").get()
+    if (journalInstalled && getAllOneJournal(db, run.messageId)) {
+      recordAllOneContributionInTransaction(db, {
+        messageId: run.messageId, agentId: run.targetAgentId,
+        agentName: String(agent.name), text: terminal.output, error: null, finishedAt: now,
+      })
+    }
     const consumed = db.prepare(`UPDATE gc_hermes_hosted_room_runs SET publishedAt=?,updatedAt=?
       WHERE queueId=? AND deliveryMode='private' AND publishedAt IS NULL`).run(now, now, queueId)
     const completed = db.prepare(`UPDATE gc_execution_queue SET status='completed',finishedAt=?,lastError=NULL
-      WHERE id=? AND status='running'`).run(now, queueId)
+      WHERE id=? AND (status='running' OR (status='failed' AND lastError='Studio restarted while work was running'))`)
+      .run(now, queueId)
     if (consumed.changes !== 1 || completed.changes !== 1) throw new Error('Hermes private result consumption changed')
     db.exec('COMMIT')
     return terminal.output

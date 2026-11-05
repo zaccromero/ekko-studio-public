@@ -52,6 +52,7 @@ import { resolveHermesHostedRoomConfig, type HermesHostedRoomConfig } from './he
 import { HermesRoomGrantClient } from './hermes-room-grant-client'
 import { hasHermesCompleteTextReply } from './hermes-run-api-client'
 import { consumeHermesHostedPrivateResult } from './hermes-hosted-room-publication'
+import { markAllOnePublished, recordAllOneContribution, setAllOneAnswer } from './allone-journal'
 
 export const GROUP_CHAT_AGENT_SOCKET_SECRET = randomBytes(32).toString('hex')
 
@@ -112,6 +113,8 @@ export type PrivateReplyCapture = {
     startedAt?: number
     launchedAt?: number
     finishedAt?: number
+    /** Source-bound private journal identity; never supplied by an Agent socket. */
+    journal?: { messageId: string; agentId: string; agentName: string }
 }
 
 export type StructuredMention =
@@ -293,7 +296,7 @@ export interface GroupAgentExecutor {
     getActiveSessionId(roomId: string): string | undefined
     isActiveSession(roomId: string, sessionId: string): boolean
     /** Post one assistant message outside a run (the @allone team reply). */
-    postOutsideRun?(roomId: string, content: string): Promise<string>
+    postOutsideRun?(roomId: string, content: string, messageId?: string): Promise<string>
     respondApproval?(approvalId: string, choice: string): Promise<boolean>
     respondClarify?(clarifyId: string, response: string): Promise<boolean>
     cancelClarify?(clarifyId: string, sessionId: string, runId: string): Promise<boolean>
@@ -907,12 +910,12 @@ export class AgentClient implements GroupAgentExecutor {
      * session. The @allone reply is posted after the merge run ended, so borrow a
      * live session (e.g. a timed-out private run) or open one for this post only.
      */
-    async postOutsideRun(roomId: string, content: string): Promise<string> {
+    async postOutsideRun(roomId: string, content: string, messageId?: string): Promise<string> {
         const live = this.activeSessions.get(roomId)
         const sessionId = live || groupRuntimeSessionId(roomId, this.profile, this.name)
         if (!live) this.activeSessions.set(roomId, sessionId)
         try {
-            return await this.sendMessage(roomId, content, groupMessageId(roomId, this.profile, this.name), {
+            return await this.sendMessage(roomId, content, messageId || groupMessageId(roomId, this.profile, this.name), {
                 role: 'assistant',
                 bypassPrivateCapture: true,
             }, sessionId)
@@ -1660,9 +1663,22 @@ export class AgentClient implements GroupAgentExecutor {
             this.privateCaptures.set(roomId, capture)
             try {
                 await this.replyToMention(roomId, { ...msg, privateCapture: undefined }, runtimeContext, onStatus)
+            } catch (error) {
+                capture.error ||= error instanceof Error ? error.message : String(error)
+                throw error
             } finally {
                 capture.finishedAt = Date.now()
                 if (this.privateCaptures.get(roomId) === capture) this.privateCaptures.delete(roomId)
+                const db = getDb()
+                if (db && capture.journal) {
+                    recordAllOneContribution(db, {
+                        messageId: capture.journal.messageId,
+                        agentId: capture.journal.agentId,
+                        agentName: capture.journal.agentName,
+                        text: capture.texts.join(''), error: capture.error,
+                        finishedAt: capture.finishedAt,
+                    })
+                }
             }
             return
         }
@@ -3251,7 +3267,21 @@ export class AgentClients {
         const preferred = localContributors.find(agent => agent.agentId === defaultAgentId) || localContributors[0] || contributors[0]
         const timeoutMs = allOneTimeoutMs()
 
-        const captures = new Map(contributors.map(agent => [agent.agentId, { texts: [], error: null } as PrivateReplyCapture]))
+        const journaled = this._storage?.reserveAllOneJournal !== undefined
+        if (journaled) {
+            if (!msg.messageId) throw new Error('@allone durable source message is required')
+            this._storage.reserveAllOneJournal({
+                messageId: msg.messageId, roomId, requesterMemberId: msg.senderId,
+                contributors: contributors.map(agent => ({ agentId: agent.agentId, name: agent.name })),
+            })
+        }
+
+        const captures = new Map(contributors.map(agent => [agent.agentId, {
+            texts: [], error: null,
+            ...(journaled && msg.messageId ? { journal: {
+                messageId: msg.messageId, agentId: agent.agentId, agentName: agent.name,
+            } } : {}),
+        } as PrivateReplyCapture]))
         const contributionPrompt = buildAllOneContributionPrompt(question, preferred.name)
         // The run input is built from msg.input before msg.content, so the original
         // message input must not override the contribution prompt. Non-text blocks
@@ -3331,9 +3361,22 @@ export class AgentClients {
         logger.info({ roomId, receipts: receipts.map(r => ({ ...r })) }, '[AgentClients] @allone receipts')
         const body = reply || buildAllOneFallbackReply(question, contributions, fallbackReason)
         const content = neutralizeMentions(`${body}\n\n${renderAllOneReceipts(receipts, askedAt)}`)
+        const publishedMessageId = journaled && msg.messageId
+            ? `gcallone_${createHash('sha256').update(msg.messageId).digest('hex')}` : undefined
+        if (journaled && publishedMessageId && msg.messageId) {
+            const db = getDb()
+            if (!db) throw new Error('@allone durable database unavailable before publication')
+            setAllOneAnswer(db, { messageId: msg.messageId, posterAgentId: poster.agentId,
+                content, publishedMessageId })
+        }
         try {
-            if (poster.postOutsideRun) await poster.postOutsideRun(roomId, content)
-            else await poster.sendMessage(roomId, content, undefined, { role: 'assistant', bypassPrivateCapture: true })
+            if (poster.postOutsideRun) await poster.postOutsideRun(roomId, content, publishedMessageId)
+            else await poster.sendMessage(roomId, content, publishedMessageId, { role: 'assistant', bypassPrivateCapture: true })
+            if (journaled && msg.messageId) {
+                const db = getDb()
+                if (!db) throw new Error('@allone durable database unavailable after publication')
+                markAllOnePublished(db, msg.messageId)
+            }
         } catch (err: any) {
             const message = err?.message || 'Failed to post @allone reply'
             logger.warn(`[AgentClients] @allone reply from ${poster.name} was not posted: ${message}`)

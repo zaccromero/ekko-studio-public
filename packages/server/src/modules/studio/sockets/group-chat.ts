@@ -2,7 +2,10 @@ import { currentPublicationLease, installPublicationAuthority, publicationLease,
 import { enrollRecoveryBeforeStart, ENROLLMENT_FAILED } from '../services/group-chat/task-recovery-enrollment'
 import { recoverCommittedResults } from '../services/group-chat/committed-result-recovery'
 import { installHermesHostedRoomLedger } from '../services/group-chat/hermes-hosted-room-ledger'
-import { publishHermesHostedRoomResult, type HostedRoomMessage } from '../services/group-chat/hermes-hosted-room-publication'
+import { assertAllOneJournalAuthority, buildAllOneRecoveryAnswer, getAllOneJournal,
+    installAllOneJournal, listUnfinishedAllOneJournal, markAllOnePublished,
+    reserveAllOneJournal, setAllOneAnswer } from '../services/group-chat/allone-journal'
+import { consumeHermesHostedPrivateResult, publishHermesHostedRoomResult, type HostedRoomMessage } from '../services/group-chat/hermes-hosted-room-publication'
 import { HermesHostedRoomCoordinator, HermesHostedRoomPendingError } from '../services/group-chat/hermes-hosted-room-coordinator'
 import { resolveHermesHostedRoomConfig } from '../services/group-chat/hermes-hosted-room-config'
 import { HermesRoomGrantClient } from '../services/group-chat/hermes-room-grant-client'
@@ -771,6 +774,7 @@ class ChatStorage {
         if (!db) return
         installPublicationAuthority(db)
         installHermesHostedRoomLedger(db)
+        installAllOneJournal(db)
         if (!_tablesEnsured) {
             // Tables are now created centrally in initAllHermesTables()
             // Only create indexes here
@@ -940,6 +944,14 @@ class ChatStorage {
                SELECT attemptId FROM gc_handoff_attempts WHERE status = 'failed'
              )`,
         ).run(now)
+    }
+
+    reserveAllOneJournal(input: { messageId: string; roomId: string; requesterMemberId: string;
+        contributors: Array<{ agentId: string; name: string }> }): boolean {
+        const db = this.db()
+        if (!db) throw new Error('@allone durable database unavailable')
+        reserveAllOneJournal(db, input)
+        return true
     }
 
     saveSessionProfile(sessionId: string, roomId: string, agentId: string, profileName: string): void {
@@ -2452,6 +2464,10 @@ class ChatStorage {
             db.prepare('DELETE FROM gc_message_routing_claims WHERE roomId = ?').run(roomId)
             db.prepare('DELETE FROM gc_message_routing_decisions WHERE roomId = ?').run(roomId)
             db.prepare('DELETE FROM gc_message_routing_contexts WHERE roomId = ?').run(roomId)
+            if (db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='gc_allone_journal'").get()) {
+                db.prepare('DELETE FROM gc_allone_contributions WHERE messageId IN (SELECT messageId FROM gc_allone_journal WHERE roomId = ?)').run(roomId)
+                db.prepare('DELETE FROM gc_allone_journal WHERE roomId = ?').run(roomId)
+            }
             db.prepare('DELETE FROM gc_execution_queue WHERE roomId = ?').run(roomId)
             db.prepare('DELETE FROM gc_messages WHERE roomId = ?').run(roomId)
             db.prepare('DELETE FROM gc_room_agents WHERE roomId = ? AND removedAt > 0').run(roomId)
@@ -3335,6 +3351,7 @@ class ChatRoom {
 // ─── GroupChat Server ────────────────────────────────────────
 
 export class GroupChatServer {
+    private readonly allOneRecoveryBootAt = Date.now()
     private io: Server
     private nsp: Namespace
     private storage: ChatStorage
@@ -4203,9 +4220,10 @@ export class GroupChatServer {
 
     private startHostedRoomReconciler(): void {
         if (this.hostedRoomReconcilerTimer) return
-        const tick = () => { void this.reconcileHostedRoomRuns().catch(error => {
-            logger.warn({ error }, '[GroupChat] hosted-room reconciliation failed')
-        }) }
+        const tick = () => { void (async () => {
+            await this.reconcileHostedRoomRuns()
+            await this.reconcileAllOneJournal()
+        })().catch(error => logger.warn({ error }, '[GroupChat] room reconciliation failed')) }
         this.hostedRoomReconcilerTimer = setInterval(tick, 60_000)
         this.hostedRoomReconcilerTimer.unref?.()
         tick()
@@ -4243,7 +4261,83 @@ export class GroupChatServer {
                     }
                 }
             }
+            const privateRows = db.prepare(`SELECT r.queueId,r.roomId,r.targetAgentId,r.state
+                FROM gc_hermes_hosted_room_runs r
+                JOIN gc_allone_journal j ON j.messageId=r.messageId AND j.roomId=r.roomId
+                WHERE r.deliveryMode='private' AND r.publishedAt IS NULL
+                  AND r.state IN ('admitted','completed') AND j.state='collecting' AND j.createdAt < ?
+                ORDER BY r.createdAt ASC LIMIT 25`).all(this.allOneRecoveryBootAt) as Array<{
+                    queueId: string; roomId: string; targetAgentId: string; state: string
+                }>
+            for (const row of privateRows) {
+                try {
+                    if (row.state === 'admitted') {
+                        const scope = resolveHermesHostedRoomConfig(row.roomId, row.targetAgentId)
+                        if (!scope) continue
+                        const coordinator = new HermesHostedRoomCoordinator(db,
+                            new HermesRoomGrantClient(scope.bootstrapUrl, scope.credential))
+                        const status = await coordinator.resumeKnownRun({
+                            queueId: row.queueId, identity: scope.identity, target: scope.target,
+                            maxWaitMs: 2_000, pollIntervalMs: 1_000,
+                        })
+                        if (status.status !== 'completed') continue
+                    }
+                    consumeHermesHostedPrivateResult(db, row.queueId)
+                } catch (error) {
+                    if (!(error instanceof HermesHostedRoomPendingError)) {
+                        logger.warn({ queueId: row.queueId, error }, '[GroupChat] private @allone result held')
+                    }
+                }
+            }
         } finally { this.hostedRoomReconciling = false }
+    }
+
+    private allOneReconciling = false
+
+    private async reconcileAllOneJournal(): Promise<void> {
+        if (this.allOneReconciling) return
+        const db = getDb()
+        if (!db) return
+        this.allOneReconciling = true
+        try {
+            for (const row of listUnfinishedAllOneJournal(db)) {
+                try {
+                    if (row.createdAt >= this.allOneRecoveryBootAt) continue
+                    assertAllOneJournalAuthority(db, row)
+                    const contributorIds = (JSON.parse(row.contributorsJson) as Array<{ agentId: string }>).map(c => c.agentId)
+                    const local = contributorIds.map(id => this.agentClients.getAgent(row.roomId, id))
+                        .find(agent => agent?.connected && agent.requiresDurableQueue !== true && agent.postOutsideRun)
+                    if (!local?.postOutsideRun) continue
+                    let current = getAllOneJournal(db, row.messageId)
+                    if (!current) continue
+                    if (current.state === 'collecting') {
+                        const configured = Number(process.env.GROUP_CHAT_ALLONE_TIMEOUT_MS)
+                        const graceMs = Math.max(12 * 60_000, Number.isFinite(configured) && configured > 0
+                            ? configured + 60_000 : 0)
+                        if (Date.now() - current.createdAt < graceMs) continue
+                        const activeVm = db.prepare(`SELECT 1 FROM gc_hermes_hosted_room_runs
+                            WHERE messageId=? AND deliveryMode='private' AND state IN ('reserved','admitted','admission_unknown')
+                              AND publishedAt IS NULL LIMIT 1`).get(current.messageId)
+                        // Past the readback window, an unknown VM run is reported as missing; it is never resubmitted.
+                        if (activeVm && Date.now() - current.createdAt < 60 * 60_000) continue
+                        const answer = buildAllOneRecoveryAnswer(db, current)
+                        const id = `gcallone_${createHash('sha256').update(current.messageId).digest('hex')}`
+                        setAllOneAnswer(db, { messageId: current.messageId, posterAgentId: local.agentId,
+                            content: answer, publishedMessageId: id })
+                        current = getAllOneJournal(db, current.messageId)
+                    }
+                    if (!current || current.state !== 'ready' || !current.answer || !current.publishedMessageId
+                        || !current.posterAgentId) continue
+                    const poster = this.agentClients.getAgent(current.roomId, current.posterAgentId)
+                    if (!poster?.connected || !poster.postOutsideRun) continue
+                    const saved = this.storage.getMessage(current.publishedMessageId)
+                    if (!saved) await poster.postOutsideRun(current.roomId, current.answer, current.publishedMessageId)
+                    markAllOnePublished(db, current.messageId)
+                } catch (error) {
+                    logger.warn({ messageId: row.messageId, error }, '[GroupChat] @allone recovery held')
+                }
+            }
+        } finally { this.allOneReconciling = false }
     }
 
     private startHandoffDispatcher(): void {
