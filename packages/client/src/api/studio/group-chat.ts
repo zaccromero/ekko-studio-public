@@ -120,6 +120,8 @@ export interface RoomAgent {
     executorType?: 'server' | 'remote'
     remoteOrigin?: string
     connectionStatus?: 'online' | 'offline'
+    effectiveExecutionRoute?: 'hermes_vm'
+    effectiveExecutionProfile?: string
     ownerMemberId?: string
     connectorId?: string
     historical?: boolean

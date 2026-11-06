@@ -14,7 +14,8 @@ export default defineConfig({
   globalTimeout: process.env.CI ? 33 * 60 * 1000 : undefined,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
-  workers: process.env.CI ? 1 : undefined,
+  // Local Vite cold loads can miss UI readiness windows at Playwright's default concurrency.
+  workers: process.env.CI ? 1 : 2,
   reporter: process.env.CI ? [['list'], ['blob']] : [['list']],
   use: {
     baseURL: BASE_URL,

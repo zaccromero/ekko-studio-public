@@ -455,6 +455,32 @@ describe('group chat baseline behavior', () => {
     })
   })
 
+  it('labels the selected hosted Hermes execution route without exposing its private endpoint', () => {
+    const storage = groupServer.getStorage()
+    storage.saveRoom('vm-room', 'VM Room', 'VMROOM')
+    const hermes = storage.addRoomAgent('vm-room', 'hermes', 'default', 'Hermes', '', 1)
+    storage.saveRoom('other-room', 'Other Room', 'OTHERROOM')
+    storage.addRoomAgent('other-room', 'hermes', 'default', 'Other Hermes', '', 1)
+    vi.stubEnv('EKKO_HERMES_VM_ROOM_ID', 'vm-room')
+    vi.stubEnv('EKKO_HERMES_VM_AGENT_ID', hermes.agentId)
+    vi.stubEnv('EKKO_HERMES_VM_TARGET_PROFILE', 'agentsystem')
+    vi.stubEnv('EKKO_HERMES_VM_BOOTSTRAP_URL', 'https://private-vm.example/p/agentsystem/')
+    vi.stubEnv('EKKO_HERMES_VM_BOOTSTRAP_KEY', 'private-test-key')
+    try {
+      const agents = groupServer.getRoomAgentViews('vm-room')
+      expect(agents.find(agent => agent.agent === 'hermes')).toMatchObject({
+        executorType: 'server',
+        effectiveExecutionRoute: 'hermes_vm',
+        effectiveExecutionProfile: 'agentsystem',
+      })
+      expect(groupServer.getRoomAgentViews('other-room')[0]).not.toHaveProperty('effectiveExecutionRoute')
+      expect(JSON.stringify(agents)).not.toContain('private-vm.example')
+      expect(JSON.stringify(agents)).not.toContain('private-test-key')
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
   it('keeps pairing tickets single-use and replaces them with revocable reconnect credentials', async () => {
     const relayStore = await import('../../packages/server/src/modules/studio/services/group-chat/agent-relay-store')
     const storage = groupServer.getStorage()

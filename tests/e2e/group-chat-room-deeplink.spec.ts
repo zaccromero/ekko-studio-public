@@ -1436,6 +1436,27 @@ test.describe('group chat room deep links', () => {
     })
   }
 
+  test('shows the effective hosted VM route while keeping the local link status separate', async ({ page }) => {
+    const previous = agentsByRoom['room-alpha'][0]
+    agentsByRoom['room-alpha'][0] = {
+      ...previous as object,
+      executorType: 'server',
+      effectiveExecutionRoute: 'hermes_vm',
+      effectiveExecutionProfile: 'agentsystem',
+      connectionStatus: 'online',
+    }
+    try {
+      await setup(page, '/#/hermes/group-chat/room/room-alpha')
+      const trigger = page.getByRole('button', { name: 'Worker' })
+      await trigger.hover()
+      await expect(page.locator('.agent-connection-details')).toContainText(
+        'Agent: hermes · Remote Hermes: agentsystem · Room link online · Profile: agentsystem · Configured model: test-provider / test-model',
+      )
+    } finally {
+      agentsByRoom['room-alpha'][0] = previous
+    }
+  })
+
   test('applies an Agent preset when adding an Agent to an existing room', async ({ page }) => {
     const api = await setup(page, '/#/hermes/group-chat/room/room-alpha')
 

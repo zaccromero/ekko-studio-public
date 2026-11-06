@@ -4070,6 +4070,12 @@ export class GroupChatServer {
         return this.storage.getRoomAgents(roomId).map(agent => {
             const { ownerMemberId, connectorId, remoteOrigin, ...visible } = agent
             const executor = this.agentClients?.getAgent?.(roomId, agent.agentId)
+            // A selected hosted Hermes run still has a local room socket. Expose
+            // its effective route separately without changing connector authority.
+            const hostedVm = agent.executorType === 'server'
+                && agent.agent === 'hermes'
+                && process.env.EKKO_HERMES_VM_ROOM_ID === roomId
+                && process.env.EKKO_HERMES_VM_AGENT_ID === agent.agentId
             const displayOwnerMemberId = ownerMemberId
                 || (agent.executorType === 'server' ? roomOwnerMemberId : '')
             const canManageAgent = agent.executorType === 'remote'
@@ -4078,6 +4084,10 @@ export class GroupChatServer {
             return {
                 ...visible,
                 connectionStatus: executor?.connected ? 'online' : 'offline',
+                ...(hostedVm ? {
+                    effectiveExecutionRoute: 'hermes_vm',
+                    effectiveExecutionProfile: process.env.EKKO_HERMES_VM_TARGET_PROFILE || '',
+                } : {}),
                 ...(displayOwnerMemberId ? { ownerMemberId: displayOwnerMemberId } : {}),
                 ...(canManageAgent ? { connectorId, remoteOrigin } : {}),
             }

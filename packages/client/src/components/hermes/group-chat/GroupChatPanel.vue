@@ -611,9 +611,13 @@ function agentActivityLabel(agent: RoomAgent): string {
 }
 
 function agentConnectionDetails(agent: RoomAgent): string[] {
-    const route = agent.executorType === 'remote'
-        ? t('groupChat.agentConnectionRemote', { origin: agent.remoteOrigin || t('groupChat.agentConnectionUnknown') })
-        : t('groupChat.agentConnectionServer')
+    const route = agent.effectiveExecutionRoute === 'hermes_vm'
+        ? t('groupChat.agentConnectionRemote', {
+            origin: agent.effectiveExecutionProfile || t('groupChat.agentConnectionUnknown'),
+        })
+        : agent.executorType === 'remote'
+            ? t('groupChat.agentConnectionRemote', { origin: agent.remoteOrigin || t('groupChat.agentConnectionUnknown') })
+            : t('groupChat.agentConnectionServer')
     const status = agent.connectionStatus === 'online'
         ? t('groupChat.agentConnectionOnline')
         : agent.connectionStatus === 'offline'
@@ -624,7 +628,8 @@ function agentConnectionDetails(agent: RoomAgent): string[] {
         t('groupChat.agentConnectionAgent', { agent: agent.agent }),
         route,
         status,
-        agent.profile && t('groupChat.agentConnectionProfile', { profile: agent.profile }),
+        (agent.effectiveExecutionProfile || agent.profile)
+            && t('groupChat.agentConnectionProfile', { profile: agent.effectiveExecutionProfile || agent.profile }),
         model ? t('groupChat.agentConnectionModel', { model }) : t('groupChat.agentConnectionDefaultModel'),
     ].filter(Boolean) as string[]
 }
