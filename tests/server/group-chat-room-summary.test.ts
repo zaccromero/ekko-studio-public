@@ -145,7 +145,7 @@ describe('group chat rolling room summary', () => {
     messages.push(
       message('old', 'assistant', 'Old peer text', 1),
       message('peer', 'assistant', 'Hermes exact peer phrase', 2),
-      message('large', 'assistant', 'x'.repeat(4_000), 3),
+      message('large', 'assistant', 'x'.repeat(9_000), 3),
       message('current', 'user', '@Cursor quote Hermes', 4),
     )
     summaries.set('room-1', {
@@ -180,8 +180,32 @@ describe('group chat rolling room summary', () => {
     })
 
     const context = service.buildRuntimeContext('room-1', 'current')
-    expect(context.history.map(item => item.id)).toEqual(['hermes', 'claude', 'cursor', 'merge'])
-    expect(context.history.reduce((sum, item) => sum + item.content.length, 0)).toBeLessThanOrEqual(3_311)
+    expect(context.history.map(item => item.id)).toEqual(['hermes', 'u1', 'codex-old', 'u2', 'claude', 'u3', 'cursor', 'u4', 'merge'])
+    expect(context.history.reduce((sum, item) => sum + item.content.length, 0)).toBeLessThanOrEqual(8_000)
+    expect(context.summary).toContain('Middle of room summary omitted')
+  })
+
+  it('reserves raw peer space after the stored summary grows beyond the former 55K cutoff', () => {
+    const { messages, summaries, service } = harness(async () => 'unused', 10)
+    messages.push(
+      message('hermes', 'assistant', 'Hermes raw phrase', 1, { senderName: 'Hermes' }),
+      message('claude', 'assistant', 'Claude raw phrase', 2, { senderName: 'Claude' }),
+      message('current', 'user', '@Cursor quote Hermes', 3),
+    )
+    const stored = 'CURRENT GOAL\n' + 'm'.repeat(58_000) + '\nPENDING NEXT STEP'
+    summaries.set('room-1', {
+      roomId: 'room-1', summary: stored, summaryThroughMessageId: 'claude',
+      summaryThroughMessageTimestamp: 2, summarizedTurnCount: 2, status: 'success',
+      version: 1, updatedAt: 2, lastError: null,
+    })
+
+    const context = service.buildRuntimeContext('room-1', 'current')
+    expect(context.history.map(item => item.id)).toEqual(['hermes', 'claude'])
+    expect(context.summary).toContain('CURRENT GOAL')
+    expect(context.summary).toContain('PENDING NEXT STEP')
+    expect(context.summary).toContain('Middle of room summary omitted')
+    expect(context.summary.length).toBeLessThan(48_000)
+    expect(summaries.get('room-1')?.summary).toBe(stored)
   })
 
   it('retains a 6K-character planning exchange like the observed room round', () => {

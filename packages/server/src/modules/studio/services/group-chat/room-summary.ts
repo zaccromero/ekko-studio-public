@@ -253,6 +253,16 @@ export class GroupRoomSummaryService {
 
   buildRuntimeContext(roomId: string, currentMessageId?: string): GroupRuntimeContext {
     const summary = this.storage.getRoomSummary(roomId)
+    const storedSummary = summary?.summary || ''
+    // Preserve the goal at the front and current state at the end, while
+    // reserving space for exact recent peer text as the stored summary grows.
+    const summaryGap = '\n[Middle of room summary omitted to keep recent raw peer messages.]\n'
+    const summaryHeadChars = 8_000
+    const summaryMaxChars = 47_000
+    const runtimeSummary = storedSummary.length > summaryMaxChars
+      ? storedSummary.slice(0, summaryHeadChars) + summaryGap
+        + storedSummary.slice(-(summaryMaxChars - summaryHeadChars - summaryGap.length))
+      : storedSummary
     const completed = messagesBeforeCurrent(
       cleanGroupMessages(this.storage.getMessagesForContext(roomId)),
       currentMessageId,
@@ -262,7 +272,7 @@ export class GroupRoomSummaryService {
       Math.floor(Number(this.storage.getRoom(roomId)?.tailMessageCount || 0))))
     // Keep a small exact-text tail even when summarization advances through it.
     // Leave room for the hosted Hermes prompt's 64K-character limit.
-    const rawTailBudget = Math.min(8_000, Math.max(0, 55_000 - (summary?.summary.length || 0)))
+    const rawTailBudget = Math.min(8_000, Math.max(0, 55_000 - runtimeSummary.length))
     const candidates = rawTailCount > 0 ? completed.slice(-rawTailCount) : []
     const selected = new Set<string>()
     const seenAgents = new Set<string>()
@@ -282,11 +292,11 @@ export class GroupRoomSummaryService {
     }
     const rawTail = candidates.filter(message => selected.has(message.id))
     const afterIds = new Set(afterSummary.map(message => message.id))
-    const overlapsSummary = Boolean(summary?.summary && rawTail.some(message => !afterIds.has(message.id)))
+    const overlapsSummary = Boolean(runtimeSummary && rawTail.some(message => !afterIds.has(message.id)))
     return {
       summary: overlapsSummary
-        ? `[Recent raw room messages below may overlap this summary. Use the raw messages for exact wording and attribution; do not count repeated turns twice.]\n${summary!.summary}`
-        : summary?.summary || '',
+        ? `[Recent raw room messages below may overlap this summary. Use the raw messages for exact wording and attribution; do not count repeated turns twice.]\n${runtimeSummary}`
+        : runtimeSummary,
       history: overlapsSummary ? rawTail : afterSummary,
     }
   }
