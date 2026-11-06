@@ -4,7 +4,7 @@ import { readFileSync, realpathSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
 
 type Project = { id: string; root: string; commit: string; paths: string[] }
-type Manifest = { roomId: string; projects: Project[] }
+type Manifest = { roomId: string; agentIds: string[]; projects: Project[] }
 
 const MAX_CONTEXT_CHARS = 24_000
 const MAX_FILE_CHARS = 4_000
@@ -25,13 +25,19 @@ function projectFile(project: Project, path: string): string {
 }
 
 /** Owner-bound, default-off source excerpts. No file-control or write authority is issued. */
-export function projectPlanningContext(roomId: string,
+export function projectPlanningContext(roomId: string, agentId: string,
   env: Record<string, string | undefined> = process.env): string {
   const manifestPath = env.EKKO_GROUP_CHAT_PROJECT_READ_MANIFEST?.trim()
   if (!manifestPath) return ''
   if (!isAbsolute(manifestPath)) throw new Error('Project planning manifest must be absolute')
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as Manifest
   if (manifest.roomId !== roomId) return ''
+  if (!Array.isArray(manifest.agentIds) || manifest.agentIds.length !== 4
+    || new Set(manifest.agentIds).size !== 4
+    || manifest.agentIds.some(id => typeof id !== 'string' || !/^[a-z0-9]{14}$/.test(id))) {
+    throw new Error('Project planning manifest requires four exact agent IDs')
+  }
+  if (!manifest.agentIds.includes(agentId)) return ''
   if (!Array.isArray(manifest.projects) || manifest.projects.length !== 2) {
     throw new Error('Project planning manifest requires two projects')
   }
@@ -70,8 +76,8 @@ export function projectPlanningContext(roomId: string,
 }
 
 /** The shared room includes other humans; only its agent owner may expose source to a turn. */
-export function ownerProjectPlanningContext(roomId: string, senderId?: string,
+export function ownerProjectPlanningContext(roomId: string, agentId: string, senderId?: string,
   ownerMemberId?: string, env: Record<string, string | undefined> = process.env): string {
   if (!senderId || !ownerMemberId || senderId !== ownerMemberId) return ''
-  return projectPlanningContext(roomId, env)
+  return projectPlanningContext(roomId, agentId, env)
 }

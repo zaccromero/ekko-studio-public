@@ -19,39 +19,41 @@ function repo(name: string, content: string): { id: string; root: string; commit
 }
 
 const projects = [repo('drako-os', 'Drako source at pinned commit.'), repo('ekko-studio', 'Ekko source at pinned commit.')]
+const agentIds = ['codex123456789', 'claude12345678', 'cursor12345678', 'hermes12345678']
 const manifestPath = join(base, 'manifest.json')
 const env = { EKKO_GROUP_CHAT_PROJECT_READ_MANIFEST: manifestPath }
 function manifest(projectsToUse = projects, roomId = 'bridge-room') {
-  writeFileSync(manifestPath, JSON.stringify({ roomId, projects: projectsToUse }))
+  writeFileSync(manifestPath, JSON.stringify({ roomId, agentIds, projects: projectsToUse }))
 }
 
 describe('owner-scoped project planning context', () => {
   it('is default off, exact-room only, and pins text to a commit', () => {
     manifest()
-    expect(projectPlanningContext('bridge-room', {})).toBe('')
-    expect(projectPlanningContext('other-room', env)).toBe('')
-    const text = projectPlanningContext('bridge-room', env)
+    expect(projectPlanningContext('bridge-room', agentIds[0], {})).toBe('')
+    expect(projectPlanningContext('other-room', agentIds[0], env)).toBe('')
+    expect(projectPlanningContext('bridge-room', 'extra1234567890', env)).toBe('')
+    const text = projectPlanningContext('bridge-room', agentIds[0], env)
     expect(text).toContain('Drako source at pinned commit.')
     expect(text).toContain('Ekko source at pinned commit.')
     expect(text).toContain(projects[0].commit)
     writeFileSync(join(projects[0].root, 'README.md'), 'Dirty working tree must not leak.')
-    expect(projectPlanningContext('bridge-room', env)).not.toContain('Dirty working tree')
+    expect(projectPlanningContext('bridge-room', agentIds[0], env)).not.toContain('Dirty working tree')
   })
 
   it('rejects expanded scope, traversal and untracked content', () => {
     manifest([{ ...projects[0], id: 'other-project' }, projects[1]])
-    expect(() => projectPlanningContext('bridge-room', env)).toThrow('scope')
+    expect(() => projectPlanningContext('bridge-room', agentIds[0], env)).toThrow('scope')
     manifest([{ ...projects[0], paths: ['../outside'] }, projects[1]])
-    expect(() => projectPlanningContext('bridge-room', env)).toThrow('path')
+    expect(() => projectPlanningContext('bridge-room', agentIds[0], env)).toThrow('path')
     manifest([{ ...projects[0], paths: ['untracked.txt'] }, projects[1]])
-    expect(() => projectPlanningContext('bridge-room', env)).toThrow('regular tracked file')
+    expect(() => projectPlanningContext('bridge-room', agentIds[0], env)).toThrow('regular tracked file')
   })
 
   it('withholds project text from other room members and agent merge turns', () => {
     manifest()
-    expect(ownerProjectPlanningContext('bridge-room', 'other-member', 'owner-member', env)).toBe('')
-    expect(ownerProjectPlanningContext('bridge-room', 'agent-merge', 'owner-member', env)).toBe('')
-    expect(ownerProjectPlanningContext('bridge-room', 'owner-member', undefined, env)).toBe('')
-    expect(ownerProjectPlanningContext('bridge-room', 'owner-member', 'owner-member', env)).toContain('Drako source')
+    expect(ownerProjectPlanningContext('bridge-room', agentIds[0], 'other-member', 'owner-member', env)).toBe('')
+    expect(ownerProjectPlanningContext('bridge-room', agentIds[0], 'agent-merge', 'owner-member', env)).toBe('')
+    expect(ownerProjectPlanningContext('bridge-room', agentIds[0], 'owner-member', undefined, env)).toBe('')
+    expect(ownerProjectPlanningContext('bridge-room', agentIds[0], 'owner-member', 'owner-member', env)).toContain('Drako source')
   })
 })
