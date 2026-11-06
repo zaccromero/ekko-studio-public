@@ -49,6 +49,19 @@ describe('owner-scoped project planning context', () => {
     expect(() => projectPlanningContext('bridge-room', agentIds[0], env)).toThrow('regular tracked file')
   })
 
+  it('ignores a local Git replacement that would falsify the pinned source', () => {
+    manifest()
+    const root = projects[0].root
+    writeFileSync(join(root, 'README.md'), 'Replacement text must not leak.')
+    execFileSync('git', ['-C', root, 'add', 'README.md'])
+    execFileSync('git', ['-C', root, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'replacement'])
+    const replacement = execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
+    execFileSync('git', ['-C', root, 'replace', projects[0].commit, replacement])
+    const text = projectPlanningContext('bridge-room', agentIds[0], env)
+    expect(text).toContain('Drako source at pinned commit.')
+    expect(text).not.toContain('Replacement text')
+  })
+
   it('withholds project text from other room members and agent merge turns', () => {
     manifest()
     expect(ownerProjectPlanningContext('bridge-room', agentIds[0], 'other-member', 'owner-member', env)).toBe('')

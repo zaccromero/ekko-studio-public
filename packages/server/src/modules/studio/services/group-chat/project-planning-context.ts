@@ -9,18 +9,26 @@ type Manifest = { roomId: string; agentIds: string[]; projects: Project[] }
 const MAX_CONTEXT_CHARS = 24_000
 const MAX_FILE_CHARS = 4_000
 const MAX_SOURCE_BYTES = 256_000
+const PINNED_GIT_ENV = {
+  PATH: process.env.PATH || '/usr/bin:/bin',
+  HOME: '/nonexistent',
+  GIT_NO_REPLACE_OBJECTS: '1',
+  GIT_CONFIG_NOSYSTEM: '1',
+  GIT_CONFIG_GLOBAL: '/dev/null',
+  GIT_OPTIONAL_LOCKS: '0',
+}
 
 function projectFile(project: Project, path: string): string {
   const root = realpathSync(project.root)
   const spec = `${project.commit}:${path}`
   const tree = execFileSync('git', ['-C', root, 'ls-tree', project.commit, '--', path], {
-    encoding: 'utf8', timeout: 5_000, maxBuffer: 4_096,
+    encoding: 'utf8', timeout: 5_000, maxBuffer: 4_096, env: PINNED_GIT_ENV,
   }).trim()
   if (!/^100(644|755) blob [a-f0-9]{40}\t/.test(tree) || !tree.endsWith(`\t${path}`)) {
     throw new Error(`Project planning path is not a regular tracked file: ${project.id}/${path}`)
   }
   return execFileSync('git', ['-C', root, 'show', spec], {
-    encoding: 'utf8', timeout: 5_000, maxBuffer: MAX_SOURCE_BYTES,
+    encoding: 'utf8', timeout: 5_000, maxBuffer: MAX_SOURCE_BYTES, env: PINNED_GIT_ENV,
   })
 }
 
