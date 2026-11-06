@@ -263,14 +263,24 @@ export class GroupRoomSummaryService {
     // Keep a small exact-text tail even when summarization advances through it.
     // Leave room for the hosted Hermes prompt's 64K-character limit.
     const rawTailBudget = Math.min(8_000, Math.max(0, 55_000 - (summary?.summary.length || 0)))
-    const rawTail: CleanGroupMessage[] = []
+    const candidates = rawTailCount > 0 ? completed.slice(-rawTailCount) : []
+    const selected = new Set<string>()
+    const seenAgents = new Set<string>()
     let rawTailChars = 0
-    for (let index = completed.length - 1; index >= 0 && rawTail.length < rawTailCount; index -= 1) {
-      const message = completed[index]
-      if (rawTailChars + message.content.length > rawTailBudget) break
-      rawTail.unshift(message)
-      rawTailChars += message.content.length
+    // Preserve the latest distinct Agent replies before filling with other room text.
+    // Otherwise a large synthesis or owner prompt can consume the entire raw budget
+    // and leave a later Agent with only a paraphrase of its peers.
+    for (let pass = 0; pass < 2; pass += 1) {
+      for (let index = candidates.length - 1; index >= 0; index -= 1) {
+        const message = candidates[index]
+        if (selected.has(message.id) || rawTailChars + message.content.length > rawTailBudget) continue
+        if (pass === 0 && (message.role !== 'assistant' || seenAgents.has(message.senderName))) continue
+        selected.add(message.id)
+        rawTailChars += message.content.length
+        if (message.role === 'assistant') seenAgents.add(message.senderName)
+      }
     }
+    const rawTail = candidates.filter(message => selected.has(message.id))
     const afterIds = new Set(afterSummary.map(message => message.id))
     const overlapsSummary = Boolean(summary?.summary && rawTail.some(message => !afterIds.has(message.id)))
     return {

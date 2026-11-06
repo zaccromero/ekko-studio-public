@@ -140,6 +140,50 @@ describe('group chat rolling room summary', () => {
     })
   })
 
+  it('keeps a recent raw peer reply when a later summarized message exceeds the tail budget', () => {
+    const { messages, summaries, service } = harness(async () => 'unused', 2)
+    messages.push(
+      message('old', 'assistant', 'Old peer text', 1),
+      message('peer', 'assistant', 'Hermes exact peer phrase', 2),
+      message('large', 'assistant', 'x'.repeat(4_000), 3),
+      message('current', 'user', '@Cursor quote Hermes', 4),
+    )
+    summaries.set('room-1', {
+      roomId: 'room-1', summary: 's'.repeat(52_000), summaryThroughMessageId: 'large',
+      summaryThroughMessageTimestamp: 3, summarizedTurnCount: 3, status: 'success',
+      version: 1, updatedAt: 3, lastError: null,
+    })
+
+    const context = service.buildRuntimeContext('room-1', 'current')
+    expect(context.history.map(item => item.id)).toEqual(['peer'])
+    expect(context.summary).toContain('may overlap this summary')
+  })
+
+  it('keeps distinct recent Agent replies when a large synthesis and owner prompts fill the tail', () => {
+    const { messages, summaries, service } = harness(async () => 'unused', 10)
+    messages.push(
+      message('hermes', 'assistant', 'h'.repeat(445), 1, { senderName: 'Hermes' }),
+      message('u1', 'user', 'u'.repeat(682), 2),
+      message('codex-old', 'assistant', 'c'.repeat(576), 3, { senderName: 'Codex' }),
+      message('u2', 'user', 'u'.repeat(671), 4),
+      message('claude', 'assistant', 'a'.repeat(610), 5, { senderName: 'Claude' }),
+      message('u3', 'user', 'u'.repeat(676), 6),
+      message('cursor', 'assistant', 'g'.repeat(567), 7, { senderName: 'Cursor Grok' }),
+      message('u4', 'user', 'u'.repeat(859), 8),
+      message('merge', 'assistant', 'm'.repeat(1_538), 9, { senderName: 'Codex' }),
+      message('current', 'user', '@Cursor quote Hermes', 10),
+    )
+    summaries.set('room-1', {
+      roomId: 'room-1', summary: 's'.repeat(51_689), summaryThroughMessageId: 'merge',
+      summaryThroughMessageTimestamp: 9, summarizedTurnCount: 9, status: 'success',
+      version: 1, updatedAt: 9, lastError: null,
+    })
+
+    const context = service.buildRuntimeContext('room-1', 'current')
+    expect(context.history.map(item => item.id)).toEqual(['hermes', 'claude', 'cursor', 'merge'])
+    expect(context.history.reduce((sum, item) => sum + item.content.length, 0)).toBeLessThanOrEqual(3_311)
+  })
+
   it('retains a 6K-character planning exchange like the observed room round', () => {
     const { messages, summaries, service } = harness(async () => 'unused', 10)
     for (let index = 0; index < 10; index += 1) {
