@@ -41,6 +41,12 @@ for (const [path, endpoint] of pages) {
     await authenticate(page)
     await mockHermesApi(page)
     await mockChatSocket(page)
+    if (path === '/hermes/version-preview') {
+      // The page loads tags alongside preview status. Keep that request healthy so
+      // this test exercises the blocked status request, not an unhandled 404.
+      await page.route('**/api/studio/update/preview/tags', route =>
+        route.fulfill({ json: { tags: [] } }))
+    }
     let release!: () => void
     const pending = new Promise<void>(resolve => { release = resolve })
     await page.route(url => url.pathname === endpoint, async route => {
