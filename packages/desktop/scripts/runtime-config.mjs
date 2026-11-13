@@ -1,10 +1,18 @@
-export const DEFAULT_HERMES_VERSION = '0.20.6'
+export const DEFAULT_HERMES_VERSION = '0.23.0'
 export const DEFAULT_HERMES_SOURCE_REPOSITORY = 'https://github.com/NousResearch/hermes-agent.git'
-export const DEFAULT_HERMES_SOURCE_REF = 'v2026.8.27'
-export const DEFAULT_HERMES_SOURCE_COMMIT = '5fc308a70719a83cccdbba4c0e39c23f5a8239d5'
+export const DEFAULT_HERMES_SOURCE_REF = 'v0.23.0'
+export const DEFAULT_HERMES_SOURCE_COMMIT = '2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19'
 
 export function hermesVersion(env = process.env) {
   return env.HERMES_VERSION || DEFAULT_HERMES_VERSION
+}
+
+export function runtimeVersion(env = process.env) {
+  const value = (env.EKKO_RUNTIME_VERSION || hermesVersion(env)).trim().replace(/^v/, '')
+  if (!value || !/^[0-9A-Za-z][0-9A-Za-z.+-]*$/.test(value)) {
+    throw new Error('EKKO_RUNTIME_VERSION must be a non-empty release identifier')
+  }
+  return value
 }
 
 export function hermesSource(env = process.env) {
@@ -46,7 +54,7 @@ export function hermesSource(env = process.env) {
 }
 
 export function runtimeReleaseTag(env = process.env) {
-  const version = hermesVersion(env)
+  const version = runtimeVersion(env)
   return env.HERMES_DESKTOP_RUNTIME_RELEASE_TAG
     || env.RUNTIME_RELEASE_TAG
     || `hermes-${version}-runtime`

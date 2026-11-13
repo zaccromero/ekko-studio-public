@@ -109,11 +109,13 @@ and `python_build_tag` together; Hermes 0.22.2 uses Python 3.14.7 from the
 python-build-standalone `20260901` release.
 
 The portable Node.js included in runtime assets is pinned independently from
-the GitHub Actions runner. Manual runtime dispatches take a target release tag;
-when the release does not exist, the upload step creates it with the workflow's
-`GITHUB_TOKEN`. Do not pre-publish runtime-only releases with a user token,
-because that emits `release.published` and starts the normal Web UI and Docker
-release workflows.
+the GitHub Actions runner. Manual runtime dispatches take a new immutable Ekko
+Runtime revision such as `0.23.0-ekko.1`; the embedded Hermes Agent version is
+recorded separately. Every platform builds and validates before a draft release
+is created, and the draft is published only after the complete matrix is
+uploaded. Existing release tags and assets are never overwritten. Do not
+pre-publish runtime-only releases with a user token, because that emits
+`release.published` and starts the normal Web UI and Docker release workflows.
 
 The published runtime keeps this updateable layout:
 
@@ -123,6 +125,8 @@ python/                 Hermes Agent Git checkout and source root
   base/                 Windows python-build-standalone base runtime
   venv/                 bundled Python environment
     Scripts/python.exe  Windows PEP 405 venv interpreter
+  manifest.json         Hermes payload paths, including the managed tool store
+  runtime-tools/        PM-owned managed Python and tool closure
   agent-browser/
   node/                  browser CLI npm prefix
   ms-playwright/
@@ -137,10 +141,15 @@ embedded at `python/base` and a sibling PEP 405 venv wraps it. Windows requires
 an absolute `pyvenv.cfg` home, so the build, package validation, extraction, and
 runtime migration paths rebase that value before launching Python. This lets
 upstream `hermes update` safely target the environment through `VIRTUAL_ENV`.
-The build also creates the upstream TUI/dashboard and verifies that the retained
-checkout is clean. `package:runtime` includes the source and Git metadata in the
-GitHub/CF archive and records them in schema 2 of the runtime manifest. Do not
-patch tracked Hermes source during this build:
+The build also creates the upstream TUI/dashboard, installs the PM-owned tool
+closure through `hermes pm install --tools-only`, and verifies that the retained
+checkout is clean. `package:runtime` requires PM facts to resolve an executable
+managed Python inside the payload, runs `hermes pm doctor`, and checks a
+relocated config command before it can emit an asset. The GitHub/CF archive
+records the immutable Runtime revision, embedded Hermes version, source
+identity, platform, checksum metadata, and managed-Python capability in schema
+3. Schema 1/2 packages stay operationally compatible but may report degraded
+maintenance health. Do not patch tracked Hermes source during this build:
 Studio-specific integration belongs in Studio, and the clean checkout is what
 allows users to run the upstream `hermes update` command directly.
 

@@ -835,6 +835,13 @@ export default {
     runtimeMigrationPending: 'Destination de migration en attente : {directory}',
     runtimeMigrationFailed: 'Échec de la migration du stockage ; le stockage précédent reste actif',
     runtimeActivationFailed: 'Le Runtime sélectionné n’a pas pu démarrer ; Ekko Studio utilise une autre version installée',
+    maintenanceDegraded: 'Ce Runtime peut exécuter des agents, mais son Python de maintenance géré est incomplet. Installez une révision corrigée avant de mettre Hermes à jour.',
+    maintenanceRequired: 'Maintenance requise',
+    maintenanceCode: {
+      'managed-python-missing': 'Python géré manquant',
+      'payload-manifest-invalid': 'métadonnées du paquet non valides',
+      'managed-python-dangling': 'Python géré indisponible',
+    },
     active: 'Active',
     installed: 'Installée',
     download: 'Télécharger',

@@ -132,6 +132,16 @@ describe('VersionManagementModal Runtime storage selector', () => {
     const status = runtimeStatus()
     status.hermes.remoteVersions = ['0.20.4', '0.20.0']
     api.fetchRuntimeVersionStatus.mockResolvedValue(status)
+    api.downloadRuntimeVersion.mockResolvedValue({
+      job: {
+        id: 'runtime-corrected',
+        kind: 'runtime',
+        version: '0.23.0-ekko.1',
+        source: 'github',
+        status: 'queued',
+        stage: 'queued',
+      },
+    })
     const wrapper = mount(VersionManagementModal, { props: { show: false } })
 
     await wrapper.setProps({ show: true })
@@ -139,6 +149,36 @@ describe('VersionManagementModal Runtime storage selector', () => {
 
     expect(wrapper.text()).toContain('0.20.4')
     expect(wrapper.text()).toContain('0.20.0')
+  })
+
+  it('shows a bounded maintenance warning for a degraded active Runtime', async () => {
+    const status = runtimeStatus()
+    status.hermes.remoteVersions = ['0.23.0-ekko.1']
+    status.hermes.installed = [{
+      version: '0.23.0',
+      platform: 'mac-arm64',
+      directory: '/state/desktop-runtime/hermes/0.23.0/mac-arm64',
+      active: true,
+      maintenanceStatus: 'degraded',
+      maintenanceCode: 'managed-python-missing',
+    }]
+    api.fetchRuntimeVersionStatus.mockResolvedValue(status)
+    const wrapper = mount(VersionManagementModal, { props: { show: false } })
+
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+
+    const warning = wrapper.get('[data-testid="runtime-maintenance-warning"]')
+    expect(warning.text()).toContain('runtimeVersions.maintenanceDegraded')
+    expect(warning.text()).toContain('runtimeVersions.maintenanceCode.managed-python-missing')
+    expect(wrapper.get('[data-testid="runtime-maintenance-tag"]').text())
+      .toContain('runtimeVersions.maintenanceRequired')
+    expect(wrapper.text()).toContain('0.23.0-ekko.1')
+    const download = wrapper.get('[data-testid="runtime-maintenance-download"]')
+    expect(download.text()).toContain('runtimeVersions.downloadGithub')
+    await download.trigger('click')
+    await flushPromises()
+    expect(api.downloadRuntimeVersion).toHaveBeenCalledWith('0.23.0-ekko.1', 'github')
   })
 
   it('shows a failed Runtime as downloadable even when remote version lookup is unavailable', async () => {
@@ -278,6 +318,7 @@ describe('VersionManagementModal Runtime storage selector', () => {
       platform: 'mac-arm64',
       directory: '/state/desktop-runtime/hermes/0.20.4/mac-arm64',
       active: false,
+      maintenanceStatus: 'unknown',
     }]
     api.fetchRuntimeVersionStatus.mockResolvedValue(status)
     api.activateRuntimeVersion.mockResolvedValue({ success: true, active: {} })

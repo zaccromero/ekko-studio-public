@@ -42,6 +42,7 @@ import {
   repairMovedHermesRuntime,
   windowsRuntimeNeedsRelocationRepair,
 } from './runtime-relocation'
+import { inspectRuntimeMaintenance, type RuntimeMaintenanceResult } from './runtime-maintenance'
 import { t } from './desktop-i18n'
 
 const DEFAULT_RUNTIME_BASE_URL = 'https://download.ekkolearnai.com'
@@ -55,7 +56,11 @@ export type RuntimeDownloadSource = 'cf' | 'github'
 type RuntimeManifest = {
   schema: number
   platform: string
+  runtimeVersion?: string
   hermesAgentVersion?: string
+  capabilities?: {
+    managedPython?: boolean
+  }
   hermesSource?: {
     repository?: string
     ref?: string
@@ -74,11 +79,13 @@ type RuntimeDescriptor = {
   name: string
   url: string
   sha256?: string
+  runtimeVersion?: string
   hermesAgentVersion?: string
 }
 
 type PackagedRuntimeRelease = {
   tag?: string
+  runtimeVersion?: string
   hermesAgentVersion?: string
 }
 
@@ -192,7 +199,11 @@ function validateWebUiVersions(root: string): void {
   }
 }
 
-function validateRuntimeDirectory(root: string, label: string): void {
+function validateRuntimeDirectory(
+  root: string,
+  label: string,
+  expectedRuntimeVersion?: string,
+): RuntimeMaintenanceResult {
   const missing = missingRuntimeFiles(root)
   if (missing.length > 0) {
     throw new Error(`${label} is missing required files: ${missing.map(file => relative(root, file)).join(', ')}`)
@@ -223,6 +234,24 @@ function validateRuntimeDirectory(root: string, label: string): void {
       throw new Error(`${label} has invalid Hermes Git source metadata`)
     }
   }
+  const maintenance = inspectRuntimeMaintenance(root)
+  if (manifest.schema >= 3) {
+    if (!manifest.runtimeVersion?.trim()) {
+      throw new Error(`${label} is missing runtimeVersion`)
+    }
+    if (expectedRuntimeVersion && manifest.runtimeVersion !== expectedRuntimeVersion) {
+      throw new Error(
+        `${label} version mismatch: expected ${expectedRuntimeVersion}, received ${manifest.runtimeVersion}`,
+      )
+    }
+    if (manifest.capabilities?.managedPython !== true) {
+      throw new Error(`${label} does not declare managed Python support`)
+    }
+    if (maintenance.status !== 'ready') {
+      throw new Error(`${label} failed managed Python validation: ${maintenance.code || 'unknown'}`)
+    }
+  }
+  return maintenance
 }
 
 function runtimeDirectoryReadyForMigration(root: string): boolean {
@@ -301,9 +330,16 @@ function packagedRuntimeReleaseMetadata(): PackagedRuntimeRelease | null {
   for (const candidate of candidates) {
     if (!existsSync(candidate)) continue
     try {
-      const metadata = JSON.parse(readFileSync(candidate, 'utf-8')) as { tag?: unknown; hermesAgentVersion?: unknown }
+      const metadata = JSON.parse(readFileSync(candidate, 'utf-8')) as {
+        tag?: unknown
+        runtimeVersion?: unknown
+        hermesAgentVersion?: unknown
+      }
       return {
         tag: typeof metadata.tag === 'string' && metadata.tag.trim() ? metadata.tag.trim() : undefined,
+        runtimeVersion: typeof metadata.runtimeVersion === 'string' && metadata.runtimeVersion.trim()
+          ? metadata.runtimeVersion.trim()
+          : undefined,
         hermesAgentVersion: typeof metadata.hermesAgentVersion === 'string' && metadata.hermesAgentVersion.trim()
           ? metadata.hermesAgentVersion.trim()
           : undefined,
@@ -324,13 +360,13 @@ export function cachedRuntimeNeedsPackagedReleaseUpdate(): boolean {
   const metadata = packagedRuntimeReleaseMetadata()
   const expectedVersion = process.env.HERMES_DESKTOP_RUNTIME_RELEASE_TAG
     ? hermesAgentVersionFromRuntimeTag(process.env.HERMES_DESKTOP_RUNTIME_RELEASE_TAG)
-    : metadata?.hermesAgentVersion || hermesAgentVersionFromRuntimeTag(metadata?.tag)
+    : metadata?.runtimeVersion || hermesAgentVersionFromRuntimeTag(metadata?.tag)
   if (!expectedVersion) return false
   const manifest = readCachedRuntimeManifest(desktopRuntimeDir())
   const assetVersion = typeof manifest?.asset?.name === 'string'
     ? manifest.asset.name.match(/hermes-agent-([^-]+)-/)?.[1]
     : undefined
-  const cachedVersion = manifest?.hermesAgentVersion || assetVersion
+  const cachedVersion = manifest?.runtimeVersion || manifest?.hermesAgentVersion || assetVersion
   const comparison = compareHermesAgentVersions(cachedVersion, expectedVersion)
   if (comparison !== null) return comparison < 0
   const match = runtimeManifestMatchesHermesAgentVersion(manifest, expectedVersion)
@@ -400,6 +436,7 @@ async function resolveRuntimeDescriptor(source?: RuntimeDownloadSource): Promise
         name: manifest.asset.name,
         url: manifest.asset.url || runtimeAssetUrl(manifest.asset.name, candidate.tag, downloadSource!),
         sha256: manifest.asset.sha256,
+        runtimeVersion: manifest.runtimeVersion,
         hermesAgentVersion: manifest.hermesAgentVersion,
       }
     } catch (err) {
@@ -624,7 +661,7 @@ export function writeActiveRuntimeVersion(
   options: { clearRuntimeActivationError?: boolean } = {},
 ): void {
   const manifest = readCachedRuntimeManifest(runtimeRoot)
-  const hermesRuntimeVersion = manifest?.hermesAgentVersion || desktopRuntimeVersion()
+  const hermesRuntimeVersion = manifest?.runtimeVersion || desktopRuntimeVersion()
   const selectedWebUiDirectory = webuiDir()
   const active = readActiveRuntimeVersion()
   const desktopAppVersion = app.getVersion().trim()
@@ -674,6 +711,11 @@ export function writeActiveRuntimeVersion(
 
 function cachedRuntimeMatches(root: string, descriptor: RuntimeDescriptor): boolean {
   if (!rootRuntimeReady(root)) return false
+  try {
+    validateRuntimeDirectory(root, 'Cached Runtime', descriptor.runtimeVersion || desktopRuntimeVersion())
+  } catch {
+    return false
+  }
   const manifest = readCachedRuntimeManifest(root)
   if (!manifest?.asset?.name) return true
   return manifest.asset.name === descriptor.name
@@ -737,22 +779,42 @@ async function sha256File(file: string): Promise<string> {
   return hash.digest('hex')
 }
 
-async function extractRuntimeArchive(archive: string, targetRoot: string): Promise<void> {
+async function extractRuntimeArchive(
+  archive: string,
+  targetRoot: string,
+  expectedRuntimeVersion: string,
+): Promise<void> {
   const parent = dirname(targetRoot)
   const tempRoot = join(parent, `.runtime-${process.pid}-${Date.now()}`)
+  const previousRoot = join(parent, `.runtime-previous-${process.pid}-${Date.now()}`)
   rmSync(tempRoot, { recursive: true, force: true })
+  rmSync(previousRoot, { recursive: true, force: true })
   mkdirSync(tempRoot, { recursive: true })
 
   try {
     await extractTarGzipArchive(archive, tempRoot)
     repairMovedHermesRuntime(tempRoot, tempRoot, targetRoot)
-    validateRuntimeDirectory(tempRoot, 'Runtime archive')
-    rmSync(targetRoot, { recursive: true, force: true })
+    validateRuntimeDirectory(tempRoot, 'Runtime archive', expectedRuntimeVersion)
     mkdirSync(parent, { recursive: true })
-    renameSync(tempRoot, targetRoot)
+    const replacingExisting = existsSync(targetRoot)
+    if (replacingExisting) renameSync(targetRoot, previousRoot)
+    try {
+      renameSync(tempRoot, targetRoot)
+    } catch (error) {
+      if (replacingExisting && existsSync(previousRoot) && !existsSync(targetRoot)) {
+        renameSync(previousRoot, targetRoot)
+      }
+      throw error
+    }
+    rmSync(previousRoot, { recursive: true, force: true })
   } catch (err) {
     rmSync(tempRoot, { recursive: true, force: true })
+    if (existsSync(previousRoot) && !existsSync(targetRoot)) renameSync(previousRoot, targetRoot)
     throw err
+  } finally {
+    if (existsSync(previousRoot) && existsSync(targetRoot)) {
+      rmSync(previousRoot, { recursive: true, force: true })
+    }
   }
 }
 
@@ -794,7 +856,11 @@ export async function ensureDesktopRuntime(
     }
 
     onProgress?.({ stage: 'extract', message: t('runtime.extracting') })
-    await extractRuntimeArchive(archive, runtimeRoot)
+    await extractRuntimeArchive(
+      archive,
+      runtimeRoot,
+      descriptor.runtimeVersion || desktopRuntimeVersion(),
+    )
   } finally {
     rmSync(archive, { force: true })
     rmSync(downloadTempDir, { recursive: true, force: true })

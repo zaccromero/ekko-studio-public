@@ -745,6 +745,13 @@ export default {
     runtimeMigrationPending: 'Ожидаемое место миграции: {directory}',
     runtimeMigrationFailed: 'Перенос хранилища не выполнен; продолжает использоваться прежнее хранилище',
     runtimeActivationFailed: 'Выбранный Runtime не удалось запустить; Ekko Studio использует другую установленную версию',
+    maintenanceDegraded: 'Этот Runtime может запускать агентов, но управляемый Python для обслуживания неполон. Перед обновлением Hermes установите исправленную ревизию.',
+    maintenanceRequired: 'Требуется обслуживание',
+    maintenanceCode: {
+      'managed-python-missing': 'управляемый Python отсутствует',
+      'payload-manifest-invalid': 'метаданные пакета недействительны',
+      'managed-python-dangling': 'управляемый Python недоступен',
+    },
     active: 'Активна',
     installed: 'Установлена',
     download: 'Скачать',

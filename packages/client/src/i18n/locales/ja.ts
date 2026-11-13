@@ -835,6 +835,13 @@ export default {
     runtimeMigrationPending: '移行先：{directory}',
     runtimeMigrationFailed: '保存先の移行に失敗したため、以前の保存先を引き続き使用します',
     runtimeActivationFailed: '選択した Runtime を起動できなかったため、Ekko Studio は別のインストール済みバージョンを使用しています',
+    maintenanceDegraded: 'この Runtime はエージェントを実行できますが、管理用 Python が不完全です。Hermes を更新する前に修正版をインストールしてください。',
+    maintenanceRequired: 'メンテナンスが必要',
+    maintenanceCode: {
+      'managed-python-missing': '管理用 Python がありません',
+      'payload-manifest-invalid': 'ペイロードのメタデータが無効です',
+      'managed-python-dangling': '管理用 Python を利用できません',
+    },
     active: '有効',
     installed: 'インストール済み',
     download: 'ダウンロード',

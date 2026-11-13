@@ -9,7 +9,7 @@ describe('desktop runtime Node.js configuration', () => {
     expect(desktopNodeVersion({
       NODE_VERSION: '24.18.0',
     })).toBe(DEFAULT_DESKTOP_NODE_VERSION)
-    expect(DEFAULT_DESKTOP_NODE_VERSION).toBe('22.22.0')
+    expect(DEFAULT_DESKTOP_NODE_VERSION).toBe('26.12.1')
   })
 
   it('accepts an explicit exact version override', () => {

@@ -257,6 +257,25 @@ for (const macCase of ['darwin-arm64', 'darwin-x64']) {
   }
 }
 
+const managedToolsInstall = desktopInstallHermes.indexOf("['pm', 'install', '--tools-only']")
+const managedToolsDoctor = desktopInstallHermes.indexOf("['pm', 'doctor']")
+const payloadManifestPublish = desktopInstallHermes.indexOf('writeFileSync(manifest')
+if (managedToolsInstall < 0 || managedToolsDoctor < managedToolsInstall || payloadManifestPublish < managedToolsDoctor) {
+  fail('install-hermes.mjs must publish the sealed payload manifest only after PM installs and verifies runtime-tools')
+}
+for (const phrase of [
+  'runtime: {',
+  'commands: {',
+  "hermes: TARGET_OS === 'win32' ? 'venv/Scripts/hermes.cmd' : 'venv/bin/hermes'",
+]) {
+  if (!desktopInstallHermes.includes(phrase)) {
+    fail(`install-hermes.mjs must publish a complete relocatable Hermes payload manifest: ${phrase}`)
+  }
+}
+if (desktopInstallHermes.includes('_chromium_installed')) {
+  fail('install-hermes.mjs must not depend on Hermes private Chromium helper APIs')
+}
+
 for (const phrase of [
   'mac-update-manifest:',
   "if: needs.validate.outputs.target_os == 'darwin' && github.event.inputs.release_tag != ''",
@@ -303,8 +322,14 @@ for (const phrase of [
   }
 }
 
-if (!desktopNodeRuntimeConfig.includes("DEFAULT_DESKTOP_NODE_VERSION = '22.22.0'")) {
-  fail('desktop runtime Node.js must stay pinned to the Hermes-compatible 22.22.0 release')
+if (!desktopNodeRuntimeConfig.includes("DEFAULT_DESKTOP_NODE_VERSION = '26.12.1'")) {
+  fail('desktop runtime Node.js must stay pinned to the Hermes 0.23-compatible 26.12.1 release')
+}
+if (!desktopFetchPython.includes("const PYTHON_VERSION = process.env.PBS_PY || '3.14.9'")) {
+  fail('desktop runtime Python must stay pinned to the Hermes 0.23-supported 3.14.9 release')
+}
+if (!desktopFetchPython.includes("const PBS_TAG = process.env.PBS_TAG || '20261021'")) {
+  fail('desktop runtime Python must stay pinned to the verified 20261021 standalone build')
 }
 if (!desktopNodeRuntimeConfig.includes('HERMES_DESKTOP_NODE_VERSION')) {
   fail('desktop runtime Node.js pin must keep an explicit environment override')
@@ -319,13 +344,22 @@ for (const inheritedVersion of ['process.env.NODE_VERSION', 'process.versions.no
 }
 
 for (const phrase of [
-  'steps.check.outputs.missing',
   'npm --prefix packages/desktop run prepare:runtime',
   'npm --prefix packages/desktop run package:runtime',
+  'actions/upload-artifact@v4',
+  'needs: [validate, runtime]',
+  'Verify complete schema 3 matrix',
+  'gh release create "$TAG"',
+  '--draft',
+  'gh release edit "$TAG"',
+  '--draft=false',
 ]) {
   if (!desktopRuntimeWorkflow.includes(phrase)) {
-    fail(`desktop-runtime.yml must build and publish missing runtime package assets: ${phrase}`)
+    fail(`desktop-runtime.yml must validate the full matrix before publishing an immutable release: ${phrase}`)
   }
+}
+if (desktopRuntimeWorkflow.includes('softprops/action-gh-release')) {
+  fail('desktop-runtime.yml must not publish assets independently from matrix jobs')
 }
 
 if (!desktopRuntimeAssetName.includes('hermes-runtime-hermes-agent-')) {
@@ -360,6 +394,8 @@ for (const phrase of [
   "git', ['status', '--porcelain']",
   "resolve(SOURCE_DIR, '.git', 'info', 'exclude')",
   "'/base/'",
+  "'/runtime-tools/'",
+  "'/manifest.json'",
 ]) {
   if (!desktopFetchHermes.includes(phrase)) {
     fail(`fetch-hermes.mjs must retain a clean, updateable source checkout: ${phrase}`)
@@ -383,7 +419,15 @@ for (const phrase of [
 }
 
 for (const phrase of [
-  'schema: 2',
+  'schema: 3',
+  'runtimeVersion: configuredRuntimeVersion',
+  'managedPython: true',
+  'validateManagedPythonPayload',
+  'Path(selected).samefile(expected)',
+  "HERMES_DISABLE_LAZY_INSTALLS: '1'",
+  "writeFileSync(join(env.HERMES_HOME, 'config.yaml'), 'model:\\n  provider: auto\\n')",
+  "['-m', 'hermes_cli.main', 'pm', 'doctor']",
+  "['-m', 'hermes_cli.main', 'config', 'get', 'model.provider']",
   "installMethod: 'git'",
   "cpSync(PY_DIR, join(stage, 'python')",
   'Relocated Hermes version mismatch',

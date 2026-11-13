@@ -28,6 +28,7 @@ export { runtimePlatformKey }
 
 type RuntimeReleaseMetadata = {
   tag?: string
+  runtimeVersion?: string
   hermesAgentVersion?: string
 }
 
@@ -87,8 +88,12 @@ function runtimeDirectoryReady(root: string): boolean {
 function readRuntimeManifestVersion(runtimeDir: string): string | null {
   try {
     const manifest = JSON.parse(readFileSync(join(runtimeDir, 'runtime-manifest.json'), 'utf-8')) as {
+      runtimeVersion?: unknown
       hermesAgentVersion?: unknown
       asset?: { name?: unknown }
+    }
+    if (typeof manifest.runtimeVersion === 'string' && manifest.runtimeVersion.trim()) {
+      return manifest.runtimeVersion.trim()
     }
     if (typeof manifest.hermesAgentVersion === 'string' && manifest.hermesAgentVersion.trim()) {
       return manifest.hermesAgentVersion.trim()
@@ -296,9 +301,16 @@ function runtimeReleaseMetadata(): RuntimeReleaseMetadata | null {
   for (const candidate of candidates) {
     if (!existsSync(candidate)) continue
     try {
-      const metadata = JSON.parse(readFileSync(candidate, 'utf-8')) as { tag?: unknown; hermesAgentVersion?: unknown }
+      const metadata = JSON.parse(readFileSync(candidate, 'utf-8')) as {
+        tag?: unknown
+        runtimeVersion?: unknown
+        hermesAgentVersion?: unknown
+      }
       return {
         tag: typeof metadata.tag === 'string' && metadata.tag.trim() ? metadata.tag.trim() : undefined,
+        runtimeVersion: typeof metadata.runtimeVersion === 'string' && metadata.runtimeVersion.trim()
+          ? metadata.runtimeVersion.trim()
+          : undefined,
         hermesAgentVersion: typeof metadata.hermesAgentVersion === 'string' && metadata.hermesAgentVersion.trim()
           ? metadata.hermesAgentVersion.trim()
           : undefined,
@@ -315,6 +327,7 @@ export function desktopRuntimeVersion(): string {
   if (versionFromTag) return versionFromTag
 
   const metadata = runtimeReleaseMetadata()
+  if (metadata?.runtimeVersion) return metadata.runtimeVersion
   if (metadata?.hermesAgentVersion) return metadata.hermesAgentVersion
 
   const versionFromMetadataTag = hermesAgentVersionFromRuntimeTag(metadata?.tag)

@@ -1,4 +1,5 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -33,7 +34,12 @@ function runtimePlatformKey(): string {
   return `${osLabel}-${process.arch}`
 }
 
-function createRuntime(root: string, version: string, options: { missingNode?: boolean } = {}): void {
+function createRuntime(root: string, version: string, options: {
+  missingNode?: boolean
+  schema?: number
+  maintenance?: 'missing' | 'valid'
+  hermesAgentVersion?: string
+} = {}): void {
   mkdirSync(join(root, 'python'), { recursive: true })
   writeFileSync(join(root, 'python', 'run_agent.py'), '')
   writeFileSync(join(root, 'python', 'cli.py'), '')
@@ -50,16 +56,53 @@ function createRuntime(root: string, version: string, options: { missingNode?: b
   } else {
     mkdirSync(join(root, 'python', 'venv', 'bin'), { recursive: true })
     writeFileSync(join(root, 'python', 'venv', 'bin', 'python3'), '')
-    writeFileSync(join(root, 'python', 'venv', 'bin', 'hermes'), '')
+    writeFileSync(join(root, 'python', 'venv', 'bin', 'hermes'), [
+      '#!/bin/sh',
+      "printf '%s\\n' 'hermes: source-update completion failed: source update has no managed Python; run `hermes pm install`; running with the previous dependencies — run `hermes update` to finish it' >&2",
+      'printf "%s\\n" "anthropic"',
+    ].join('\n'))
+    chmodSync(join(root, 'python', 'venv', 'bin', 'hermes'), 0o755)
     if (!options.missingNode) {
       mkdirSync(join(root, 'node', 'bin'), { recursive: true })
       writeFileSync(join(root, 'node', 'bin', 'node'), '')
     }
   }
+  const schema = options.schema || 1
+  if (schema >= 2) {
+    mkdirSync(join(root, 'python', '.git'), { recursive: true })
+    writeFileSync(join(root, 'python', '.git', 'HEAD'), 'ref: refs/heads/main\n')
+    writeFileSync(join(root, 'python', 'pyproject.toml'), '[project]\nname="fixture"\n')
+  }
+  if (options.maintenance) {
+    mkdirSync(join(root, 'python', 'runtime-tools'), { recursive: true })
+    writeFileSync(join(root, 'python', 'manifest.json'), JSON.stringify({ store: 'runtime-tools' }))
+    const packages = options.maintenance === 'valid'
+      ? { python: { entry: 'python-fixture' } }
+      : { chromium: { entry: 'chromium-fixture' } }
+    writeFileSync(join(root, 'python', 'runtime-tools', 'facts.json'), JSON.stringify({ packages }))
+    if (options.maintenance === 'valid') {
+      const managedPython = process.platform === 'win32'
+        ? join(root, 'python', 'runtime-tools', 'python-fixture', 'python.exe')
+        : join(root, 'python', 'runtime-tools', 'python-fixture', 'bin', 'python3')
+      mkdirSync(join(managedPython, '..'), { recursive: true })
+      writeFileSync(managedPython, '')
+      if (process.platform !== 'win32') chmodSync(managedPython, 0o755)
+    }
+  }
   writeFileSync(join(root, 'runtime-manifest.json'), JSON.stringify({
-    schema: 1,
+    schema,
     platform: runtimePlatformKey(),
-    hermesAgentVersion: version,
+    ...(schema >= 3 ? {
+      runtimeVersion: version,
+      capabilities: { managedPython: true },
+      hermesSource: {
+        repository: 'https://github.com/NousResearch/hermes-agent.git',
+        ref: 'v2026.9.24',
+        commit: '2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19',
+        installMethod: 'git',
+      },
+    } : {}),
+    hermesAgentVersion: options.hermesAgentVersion || version,
   }))
 }
 
@@ -347,6 +390,87 @@ describe('runtime version manager storage migration', () => {
     expect(() => activateInstalledRuntimeVersion('0.20.0'))
       .toThrow(/Runtime 0\.20\.0 cannot be activated:.*node/)
     expect(JSON.parse(readFileSync(activeVersionPath, 'utf-8')).runtimeDirectory).toBe(validRuntime)
+  })
+
+  it('keeps a legacy operational Runtime available while reporting degraded maintenance', async () => {
+    const platform = runtimePlatformKey()
+    const runtime = join(state.appHome, 'desktop-runtime', 'hermes', '0.23.0', platform)
+    createRuntime(runtime, '0.23.0', { maintenance: 'missing' })
+
+    const {
+      activateInstalledRuntimeVersion,
+      listInstalledRuntimeVersions,
+    } = await import('../../packages/server/src/modules/hermes/services/runtime/version-manager')
+
+    expect(listInstalledRuntimeVersions()).toEqual([
+      expect.objectContaining({
+        version: '0.23.0',
+        maintenanceStatus: 'degraded',
+        maintenanceCode: 'managed-python-missing',
+      }),
+    ])
+    expect(activateInstalledRuntimeVersion('0.23.0').hermesRuntimeVersion).toBe('0.23.0')
+  })
+
+  it.skipIf(process.platform === 'win32')('reproduces the recovered bundle warning without contacting a provider', async () => {
+    const platform = runtimePlatformKey()
+    const runtime = join(state.appHome, 'desktop-runtime', 'hermes', '0.23.0', platform)
+    createRuntime(runtime, '0.23.0', { maintenance: 'missing' })
+    const hermes = join(runtime, 'python', 'venv', 'bin', 'hermes')
+
+    const result = spawnSync(hermes, ['config', 'get', 'model.provider'], { encoding: 'utf8' })
+
+    expect(result.status).toBe(0)
+    expect(result.stdout.trim()).toBe('anthropic')
+    expect(result.stderr.trim()).toBe(
+      'hermes: source-update completion failed: source update has no managed Python; run `hermes pm install`; '
+      + 'running with the previous dependencies — run `hermes update` to finish it',
+    )
+  })
+
+  it('requires schema 3 Runtimes to contain a valid managed Python', async () => {
+    const platform = runtimePlatformKey()
+    const broken = join(state.appHome, 'desktop-runtime', 'hermes', '0.23.0-ekko.1', platform)
+    createRuntime(broken, '0.23.0-ekko.1', {
+      schema: 3,
+      maintenance: 'missing',
+      hermesAgentVersion: '0.23.0',
+    })
+
+    const {
+      activateInstalledRuntimeVersion,
+      listInstalledRuntimeVersions,
+    } = await import('../../packages/server/src/modules/hermes/services/runtime/version-manager')
+
+    expect(listInstalledRuntimeVersions()).toEqual([])
+    expect(() => activateInstalledRuntimeVersion('0.23.0-ekko.1'))
+      .toThrow(/managed Python validation: managed-python-missing/)
+  })
+
+  it('tracks an immutable Runtime revision separately from its Hermes Agent version', async () => {
+    const platform = runtimePlatformKey()
+    const runtime = join(state.appHome, 'desktop-runtime', 'hermes', '0.23.0-ekko.1', platform)
+    createRuntime(runtime, '0.23.0-ekko.1', {
+      schema: 3,
+      maintenance: 'valid',
+      hermesAgentVersion: '0.23.0',
+    })
+
+    const {
+      activateInstalledRuntimeVersion,
+      listInstalledRuntimeVersions,
+    } = await import('../../packages/server/src/modules/hermes/services/runtime/version-manager')
+    const installed = listInstalledRuntimeVersions()
+
+    expect(installed).toEqual([
+      expect.objectContaining({
+        version: '0.23.0-ekko.1',
+        manifestHermesRuntimeVersion: '0.23.0',
+        maintenanceStatus: 'ready',
+      }),
+    ])
+    expect(activateInstalledRuntimeVersion('0.23.0-ekko.1').hermesRuntimeVersion)
+      .toBe('0.23.0-ekko.1')
   })
 
   it('clears the previous activation error after selecting a valid Runtime', async () => {

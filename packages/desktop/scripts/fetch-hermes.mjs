@@ -113,7 +113,14 @@ const needsStamp = needsHermesInstallStamp(sourceVersion, source, existsSync(sta
 // autostash.
 const excludePath = resolve(SOURCE_DIR, '.git', 'info', 'exclude')
 const exclude = existsSync(excludePath) ? readFileSync(excludePath, 'utf-8') : ''
-const runtimeExcludes = ['/base/', '/node/', '/ms-playwright/', '/install-stamp.json']
+const runtimeExcludes = [
+  '/base/',
+  '/node/',
+  '/ms-playwright/',
+  '/install-stamp.json',
+  '/manifest.json',
+  '/runtime-tools/',
+]
 const missingExcludes = runtimeExcludes.filter(pattern => !exclude.split(/\r?\n/).includes(pattern))
 if (missingExcludes.length > 0) {
   appendFileSync(excludePath, `${exclude.endsWith('\n') || !exclude ? '' : '\n'}${missingExcludes.join('\n')}\n`)

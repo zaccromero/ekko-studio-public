@@ -63,6 +63,14 @@ const runtimeVersions = computed(() => uniqueVersions([
 ]))
 
 const runtimeJobs = computed(() => jobs.value.filter(job => job.kind === 'runtime'))
+const activeRuntimeMaintenance = computed(() =>
+  currentPlatformRuntime.value.find(item => item.active && item.maintenanceStatus === 'degraded'),
+)
+const correctedRuntimeVersion = computed(() => {
+  if (!activeRuntimeMaintenance.value) return undefined
+  return uniqueVersions(status.value?.hermes.remoteVersions || [])
+    .find(version => version !== activeRuntimeMaintenance.value?.version && !runtimeFor(version))
+})
 
 watch(() => props.show, show => {
   if (show) {
@@ -398,6 +406,29 @@ async function removeRuntime(version: string) {
           >
             {{ t('runtimeVersions.runtimeActivationFailed') }}: {{ status.hermes.activationError }}
           </NAlert>
+          <NAlert
+            v-if="activeRuntimeMaintenance"
+            data-testid="runtime-maintenance-warning"
+            type="warning"
+            :bordered="false"
+          >
+            {{ t('runtimeVersions.maintenanceDegraded') }}
+            <template v-if="activeRuntimeMaintenance.maintenanceCode">
+              ({{ t(`runtimeVersions.maintenanceCode.${activeRuntimeMaintenance.maintenanceCode}`) }})
+            </template>
+            <NButton
+              v-if="correctedRuntimeVersion"
+              data-testid="runtime-maintenance-download"
+              size="small"
+              type="primary"
+              secondary
+              :disabled="!!activeJob('runtime', correctedRuntimeVersion)"
+              :loading="actionLoading[`download-runtime-github-${correctedRuntimeVersion}`]"
+              @click="startRuntimeDownload(correctedRuntimeVersion, 'github')"
+            >
+              {{ t('runtimeVersions.downloadGithub') }} {{ correctedRuntimeVersion }}
+            </NButton>
+          </NAlert>
           <div class="version-list">
             <div v-for="version in runtimeVersions" :key="`runtime-${version}`" class="version-row">
               <div class="version-main">
@@ -407,6 +438,15 @@ async function removeRuntime(version: string) {
                 </NTag>
                 <NTag v-else-if="runtimeFor(version)" size="small" :bordered="false">
                   {{ t('runtimeVersions.installed') }}
+                </NTag>
+                <NTag
+                  v-if="runtimeFor(version)?.maintenanceStatus === 'degraded'"
+                  data-testid="runtime-maintenance-tag"
+                  size="small"
+                  type="warning"
+                  :bordered="false"
+                >
+                  {{ t('runtimeVersions.maintenanceRequired') }}
                 </NTag>
                 <NTag v-if="activeJob('runtime', version)" size="small" :type="jobType(activeJob('runtime', version)!.status)" :bordered="false">
                   {{ jobLabel(activeJob('runtime', version)!) }}

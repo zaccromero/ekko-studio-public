@@ -835,6 +835,13 @@ export default {
     runtimeMigrationPending: 'Destino de migración pendiente: {directory}',
     runtimeMigrationFailed: 'La migración del almacenamiento falló; se sigue usando el almacenamiento anterior',
     runtimeActivationFailed: 'No se pudo iniciar el Runtime seleccionado; Ekko Studio está usando otra versión instalada',
+    maintenanceDegraded: 'Este Runtime puede ejecutar agentes, pero su Python de mantenimiento administrado está incompleto. Instala una revisión corregida antes de actualizar Hermes.',
+    maintenanceRequired: 'Mantenimiento requerido',
+    maintenanceCode: {
+      'managed-python-missing': 'falta el Python administrado',
+      'payload-manifest-invalid': 'los metadatos del paquete no son válidos',
+      'managed-python-dangling': 'el Python administrado no está disponible',
+    },
     active: 'Activa',
     installed: 'Instalada',
     download: 'Descargar',

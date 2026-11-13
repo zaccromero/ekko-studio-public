@@ -7,16 +7,17 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { arch as osArch, platform as osPlatform, tmpdir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
-import { hermesSource } from './runtime-config.mjs'
+import { hermesSource, runtimeVersion } from './runtime-config.mjs'
 import { hermesInstalledVersionScript } from './hermes-version.mjs'
 import {
   bundledBaseHomePath,
@@ -39,6 +40,7 @@ const NODE_DIR = resolve(ROOT, 'resources', 'node', PLATFORM)
 const GIT_DIR = resolve(ROOT, 'resources', 'git', PLATFORM)
 const pyBin = venvPythonPath(VENV_DIR, TARGET_OS)
 const configuredSource = hermesSource()
+const configuredRuntimeVersion = runtimeVersion()
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, { stdio: 'inherit', ...options })
@@ -53,6 +55,98 @@ function output(command, args, options = {}) {
     process.exit(result.status ?? 1)
   }
   return result.stdout.trim()
+}
+
+function isSameOrNested(parent, candidate) {
+  const rel = relative(resolve(parent), resolve(candidate))
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
+}
+
+function validateManagedPythonPayload(source, venv, python) {
+  const manifestPath = join(source, 'manifest.json')
+  if (!existsSync(manifestPath)) throw new Error('Hermes payload manifest is missing')
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+  if (typeof manifest.store !== 'string' || !manifest.store || isAbsolute(manifest.store)) {
+    throw new Error('Hermes payload manifest has an invalid tool store')
+  }
+  const store = resolve(source, manifest.store)
+  if (!isSameOrNested(source, store)) throw new Error('Hermes payload tool store escapes the payload')
+  const factsPath = join(store, 'facts.json')
+  if (!existsSync(factsPath)) throw new Error('Hermes payload tool facts are missing')
+  const facts = JSON.parse(readFileSync(factsPath, 'utf8'))
+  const entry = facts?.packages?.python?.entry
+  if (typeof entry !== 'string' || !entry || isAbsolute(entry)) {
+    throw new Error('Hermes payload managed Python entry is missing')
+  }
+  const entryRoot = resolve(store, entry)
+  if (!isSameOrNested(store, entryRoot)) throw new Error('Hermes payload managed Python entry escapes the tool store')
+  const managedPython = TARGET_OS === 'win32'
+    ? join(entryRoot, 'python.exe')
+    : join(entryRoot, 'bin', 'python3')
+  const sourceReal = realpathSync(source)
+  const storeReal = realpathSync(store)
+  if (!isSameOrNested(sourceReal, storeReal)) {
+    throw new Error('Hermes payload tool store resolves outside the payload')
+  }
+  const managedPythonReal = realpathSync(managedPython)
+  if (!isSameOrNested(storeReal, managedPythonReal) || !statSync(managedPythonReal).isFile()) {
+    throw new Error('Hermes payload managed Python is invalid')
+  }
+  if (TARGET_OS !== 'win32' && (statSync(managedPythonReal).mode & 0o111) === 0) {
+    throw new Error('Hermes payload managed Python is not executable')
+  }
+
+  output(python, [
+    '-c',
+    [
+      'import sys',
+      'from pathlib import Path',
+      'from hermes_cli._launchers import resolve_store_python',
+      'selected = resolve_store_python(Path(sys.argv[1]))',
+      'assert selected is not None, "managed Python did not resolve"',
+      'expected = Path(sys.argv[2])',
+      'assert Path(selected).samefile(expected), (selected, expected)',
+    ].join('; '),
+    source,
+    managedPythonReal,
+  ])
+
+  const isolatedHome = mkdtempSync(join(tmpdir(), 'ekko-hermes-package-check-'))
+  const env = {
+    ...process.env,
+    HOME: isolatedHome,
+    USERPROFILE: isolatedHome,
+    HERMES_HOME: join(isolatedHome, '.hermes'),
+    HERMES_RUNTIME_DIR: store,
+    HERMES_DISABLE_LAZY_INSTALLS: '1',
+    VIRTUAL_ENV: venv,
+  }
+  try {
+    // The relocation gate must exercise the real config command without
+    // borrowing the builder's provider selection or credentials. This file
+    // exists only inside the disposable validation home and is removed below.
+    mkdirSync(env.HERMES_HOME, { recursive: true })
+    writeFileSync(join(env.HERMES_HOME, 'config.yaml'), 'model:\n  provider: auto\n')
+    for (const args of [
+      ['-m', 'hermes_cli.main', 'pm', 'doctor'],
+      ['-m', 'hermes_cli.main', 'config', 'get', 'model.provider'],
+    ]) {
+      const checked = spawnSync(python, args, {
+        cwd: source,
+        env,
+        encoding: 'utf8',
+      })
+      if (checked.status !== 0) {
+        throw new Error(checked.stderr || checked.stdout || `Hermes payload check failed: ${args.join(' ')}`)
+      }
+      const outputText = `${checked.stdout || ''}\n${checked.stderr || ''}`
+      if (/source-update completion failed|no managed Python/i.test(outputText)) {
+        throw new Error('Hermes payload emitted the managed Python completion warning')
+      }
+    }
+  } finally {
+    rmSync(isolatedHome, { recursive: true, force: true })
+  }
 }
 
 async function sha256File(file) {
@@ -139,6 +233,7 @@ try {
       ),
     )
   }
+  validateManagedPythonPayload(stagedSource, stagedVenv, stagedPython)
   const stagedVersion = output(stagedPython, [
     '-c',
     [
@@ -175,11 +270,15 @@ try {
   }
 
   const runtimeManifest = {
-    schema: 2,
+    schema: 3,
     platform: PLATFORM,
     targetOs: TARGET_OS,
     targetArch: TARGET_ARCH,
+    runtimeVersion: configuredRuntimeVersion,
     hermesAgentVersion,
+    capabilities: {
+      managedPython: true,
+    },
     hermesSource: {
       repository: sourceRepository,
       ref: configuredSource.ref,

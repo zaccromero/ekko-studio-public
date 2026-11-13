@@ -835,6 +835,13 @@ export default {
     runtimeMigrationPending: 'Ausstehendes Migrationsziel: {directory}',
     runtimeMigrationFailed: 'Speichermigration fehlgeschlagen; der vorherige Speicher bleibt aktiv',
     runtimeActivationFailed: 'Die ausgewählte Runtime konnte nicht gestartet werden; Ekko Studio verwendet eine andere installierte Version',
+    maintenanceDegraded: 'Diese Runtime kann Agents ausführen, aber das verwaltete Wartungs-Python ist unvollständig. Installiere vor einem Hermes-Update eine korrigierte Revision.',
+    maintenanceRequired: 'Wartung erforderlich',
+    maintenanceCode: {
+      'managed-python-missing': 'verwaltetes Python fehlt',
+      'payload-manifest-invalid': 'Paketmetadaten sind ungültig',
+      'managed-python-dangling': 'verwaltetes Python ist nicht verfügbar',
+    },
     active: 'Aktiv',
     installed: 'Installiert',
     download: 'Herunterladen',

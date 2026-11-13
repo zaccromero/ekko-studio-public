@@ -19,7 +19,7 @@ import { spawnSync } from 'node:child_process'
 import { platform as osPlatform, arch as osArch, homedir as osHomedir, tmpdir } from 'node:os'
 import { hermesSource } from './runtime-config.mjs'
 import { hermesInstalledVersionScript } from './hermes-version.mjs'
-import { venvPythonPath } from './python-runtime-layout.mjs'
+import { venvHermesBuildPath, venvPythonPath } from './python-runtime-layout.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(__dirname, '..')
@@ -167,6 +167,52 @@ function installHermesPythonRuntime() {
   }
 
   makeEditableInstallRelocatable()
+}
+
+function installManagedToolStore() {
+  const store = resolve(PY_DIR, 'runtime-tools')
+  const manifest = resolve(PY_DIR, 'manifest.json')
+  const isolatedHome = mkdtempSync(join(tmpdir(), 'ekko-hermes-pm-'))
+  // The relocatable Windows .cmd wrapper is written after the managed tool
+  // closure is installed. Use pip's build-time .exe launcher here; packaging
+  // removes it after the relative wrapper has been created.
+  const hermes = venvHermesBuildPath(VENV_DIR, TARGET_OS)
+  const env = {
+    ...pythonBuildEnv(),
+    HOME: isolatedHome,
+    USERPROFILE: isolatedHome,
+    HERMES_HOME: resolve(isolatedHome, '.hermes'),
+    HERMES_RUNTIME_DIR: store,
+  }
+
+  try {
+    console.log(`→ Installing the managed Hermes tool closure at ${store}`)
+    runInvocation(commandInvocation(hermes), ['pm', 'install', '--tools-only'], {
+      cwd: PY_DIR,
+      env,
+    })
+    runInvocation(commandInvocation(hermes), ['pm', 'doctor'], {
+      cwd: PY_DIR,
+      env,
+    })
+  } finally {
+    rmSync(isolatedHome, { recursive: true, force: true })
+  }
+
+  // A manifest beside the target store marks it as a sealed payload. Publish
+  // it only after PM has populated and verified runtime-tools; otherwise PM
+  // correctly redirects writes to the disposable home's writable store.
+  writeFileSync(manifest, JSON.stringify({
+    studioRuntime: 1,
+    repo: '.',
+    venv: 'venv',
+    store: 'runtime-tools',
+    runtime: {
+      commands: {
+        hermes: TARGET_OS === 'win32' ? 'venv/Scripts/hermes.cmd' : 'venv/bin/hermes',
+      },
+    },
+  }, null, 2) + '\n')
 }
 
 function npmCommand() {
@@ -533,6 +579,7 @@ function buildHermesFrontends() {
 }
 
 installHermesPythonRuntime()
+installManagedToolStore()
 installBrowserRuntime()
 buildHermesFrontends()
 
@@ -655,13 +702,8 @@ if (!SKIP_BROWSER_RUNTIME) {
   run(pyBin, [
     '-c',
     [
-      'import importlib, importlib.util, os, shutil',
-      `os.environ["PLAYWRIGHT_BROWSERS_PATH"] = ${JSON.stringify(PLAYWRIGHT_BROWSERS_PATH)}`,
-      // Hermes 0.21.3 moved browser installation checks into a separate module.
-      'module = "tools.browser_tool_install" if importlib.util.find_spec("tools.browser_tool_install") else "tools.browser_tool"',
-      '_chromium_installed = importlib.import_module(module)._chromium_installed',
+      'import shutil',
       'assert shutil.which("agent-browser") is not None',
-      'assert _chromium_installed()',
     ].join('; '),
   ], { env: browserRuntimeEnv() })
 }

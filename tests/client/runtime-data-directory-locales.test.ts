@@ -33,6 +33,11 @@ const requiredPaths = [
   'runtimeVersions.dataDirectoryEnvLinux',
   'runtimeVersions.dataDirectoryEnvDocker',
   'runtimeVersions.dataDirectoryEnvRestart',
+  'runtimeVersions.maintenanceDegraded',
+  'runtimeVersions.maintenanceRequired',
+  'runtimeVersions.maintenanceCode.managed-python-missing',
+  'runtimeVersions.maintenanceCode.payload-manifest-invalid',
+  'runtimeVersions.maintenanceCode.managed-python-dangling',
 ]
 
 function getPath(messages: Record<string, unknown>, path: string): unknown {

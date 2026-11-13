@@ -823,6 +823,13 @@ export default {
     runtimeMigrationPending: 'Pending migration destination: {directory}',
     runtimeMigrationFailed: 'Storage migration failed; the previous storage remains active',
     runtimeActivationFailed: 'The selected Runtime could not start, so Ekko Studio used another installed version',
+    maintenanceDegraded: 'This Runtime can run agents, but its managed maintenance Python is incomplete. Install a corrected Runtime revision before updating Hermes.',
+    maintenanceRequired: 'Maintenance required',
+    maintenanceCode: {
+      'managed-python-missing': 'managed Python is missing',
+      'payload-manifest-invalid': 'payload metadata is invalid',
+      'managed-python-dangling': 'managed Python is unavailable',
+    },
     active: 'Active',
     installed: 'Installed',
     download: 'Download',

@@ -6,6 +6,12 @@ export function venvPythonPath(venvDir, targetOs) {
     : join(venvDir, 'bin', 'python3')
 }
 
+export function venvHermesBuildPath(venvDir, targetOs) {
+  return targetOs === 'win32'
+    ? join(venvDir, 'Scripts', 'hermes.exe')
+    : join(venvDir, 'bin', 'hermes')
+}
+
 export function bundledBasePythonPath(pythonRoot, targetOs) {
   return targetOs === 'win32'
     ? join(pythonRoot, 'base', 'python.exe')

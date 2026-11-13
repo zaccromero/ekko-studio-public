@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   createReadStream,
   existsSync,
   lstatSync,
@@ -88,6 +89,7 @@ function setPlatform(platform: NodeJS.Platform): void {
 
 async function createRuntimeArchive(options: {
   invalidSchema2Source?: boolean
+  schema3Maintenance?: 'missing' | 'valid'
   standardWindowsVenv?: boolean
 } = {}): Promise<string> {
   const source = tempDir('hermes-runtime-source-')
@@ -102,6 +104,39 @@ async function createRuntimeArchive(options: {
         repository: 'https://github.com/NousResearch/hermes-agent.git',
         ref: 'v2026.7.30',
         commit: 'cc4cab2f592e60a197e796506de9168f74baf3ea',
+        installMethod: 'git',
+      },
+      asset: { name: 'hermes-runtime-test.tar.gz' },
+    }))
+  }
+  if (options.schema3Maintenance) {
+    mkdirSync(join(source, 'python', '.git'), { recursive: true })
+    writeFileSync(join(source, 'python', '.git', 'HEAD'), 'ref: refs/heads/main\n')
+    writeFileSync(join(source, 'python', 'pyproject.toml'), '[project]\nname="fixture"\n')
+    mkdirSync(join(source, 'python', 'runtime-tools'), { recursive: true })
+    writeFileSync(join(source, 'python', 'manifest.json'), JSON.stringify({ store: 'runtime-tools' }))
+    const packages = options.schema3Maintenance === 'valid'
+      ? { python: { entry: 'python-fixture' } }
+      : { chromium: { entry: 'chromium-fixture' } }
+    writeFileSync(join(source, 'python', 'runtime-tools', 'facts.json'), JSON.stringify({ packages }))
+    if (options.schema3Maintenance === 'valid') {
+      const managedPython = process.platform === 'win32'
+        ? join(source, 'python', 'runtime-tools', 'python-fixture', 'python.exe')
+        : join(source, 'python', 'runtime-tools', 'python-fixture', 'bin', 'python3')
+      mkdirSync(join(managedPython, '..'), { recursive: true })
+      writeFileSync(managedPython, '')
+      if (process.platform !== 'win32') chmodSync(managedPython, 0o755)
+    }
+    writeFileSync(join(source, 'runtime-manifest.json'), JSON.stringify({
+      schema: 3,
+      platform: `${process.platform === 'win32' ? 'win' : process.platform === 'darwin' ? 'mac' : process.platform}-${process.arch}`,
+      runtimeVersion: '0.23.0-ekko.1',
+      hermesAgentVersion: '0.23.0',
+      capabilities: { managedPython: true },
+      hermesSource: {
+        repository: 'https://github.com/NousResearch/hermes-agent.git',
+        ref: 'v2026.9.24',
+        commit: '2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19',
         installMethod: 'git',
       },
       asset: { name: 'hermes-runtime-test.tar.gz' },
@@ -273,6 +308,52 @@ describe('desktop runtime manager', () => {
     const { ensureDesktopRuntime } = await import('../../packages/desktop/src/main/runtime-manager')
 
     await expect(ensureDesktopRuntime()).rejects.toThrow(/updateable Hermes source files/)
+  })
+
+  it('rejects schema 3 archives with a missing managed Python before activation', async () => {
+    process.env.HERMES_DESKTOP_RUNTIME_RELEASE_TAG = 'hermes-0.23.0-ekko.1-runtime'
+    const archive = await createRuntimeArchive({ schema3Maintenance: 'missing' })
+    process.env.HERMES_DESKTOP_RUNTIME_URL = await serveFile(archive)
+
+    const { runtimePlatformKey } = await import('../../packages/desktop/src/main/runtime-paths')
+    const existingRuntime = join(
+      process.env.HERMES_WEB_UI_HOME!,
+      'desktop-runtime',
+      'hermes',
+      '0.23.0-ekko.1',
+      runtimePlatformKey(),
+    )
+    mkdirSync(existingRuntime, { recursive: true })
+    writeFileSync(join(existingRuntime, 'preserved.txt'), 'working runtime')
+    const { ensureDesktopRuntime } = await import('../../packages/desktop/src/main/runtime-manager')
+
+    await expect(ensureDesktopRuntime()).rejects.toThrow(
+      /managed Python validation: managed-python-missing/,
+    )
+    expect(readFileSync(join(existingRuntime, 'preserved.txt'), 'utf-8')).toBe('working runtime')
+  })
+
+  it('activates a validated schema 3 Runtime revision independently of Hermes Agent', async () => {
+    process.env.HERMES_DESKTOP_RUNTIME_RELEASE_TAG = 'hermes-0.23.0-ekko.1-runtime'
+    const archive = await createRuntimeArchive({ schema3Maintenance: 'valid' })
+    process.env.HERMES_DESKTOP_RUNTIME_URL = await serveFile(archive)
+
+    const { runtimePlatformKey } = await import('../../packages/desktop/src/main/runtime-paths')
+    const { ensureDesktopRuntime } = await import('../../packages/desktop/src/main/runtime-manager')
+    await ensureDesktopRuntime()
+
+    const active = JSON.parse(readFileSync(
+      join(process.env.HERMES_WEB_UI_HOME!, 'desktop-runtime', 'active-version.json'),
+      'utf-8',
+    ))
+    expect(active.hermesRuntimeVersion).toBe('0.23.0-ekko.1')
+    expect(active.runtimeDirectory).toBe(join(
+      process.env.HERMES_WEB_UI_HOME!,
+      'desktop-runtime',
+      'hermes',
+      '0.23.0-ekko.1',
+      runtimePlatformKey(),
+    ))
   })
 
   it('does not persist a development Web UI override as the active download directory', async () => {

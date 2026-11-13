@@ -27,6 +27,8 @@ export interface InstalledRuntimeVersion {
   directory: string
   active: boolean
   manifestHermesRuntimeVersion?: string
+  maintenanceStatus: 'ready' | 'degraded' | 'unknown'
+  maintenanceCode?: 'managed-python-missing' | 'payload-manifest-invalid' | 'managed-python-dangling'
 }
 
 export interface InstalledWebUiVersion {

@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 import { arch as osArch, platform as osPlatform } from 'node:os'
-import { hermesVersion, runtimeReleaseTag } from './runtime-config.mjs'
+import { hermesVersion, runtimeReleaseTag, runtimeVersion } from './runtime-config.mjs'
 
 const TARGET_OS = process.env.TARGET_OS || osPlatform()
 const TARGET_ARCH = process.env.TARGET_ARCH || osArch()
 const HERMES_VERSION = hermesVersion()
+const EKKO_RUNTIME_VERSION = runtimeVersion()
 const RUNTIME_RELEASE_TAG = runtimeReleaseTag()
 const OS_LABEL = TARGET_OS === 'win32' ? 'win' : TARGET_OS === 'darwin' ? 'mac' : TARGET_OS
 
@@ -23,6 +24,8 @@ if (process.argv.includes('--manifest')) {
   console.log(platform)
 } else if (process.argv.includes('--release-tag')) {
   console.log(RUNTIME_RELEASE_TAG)
+} else if (process.argv.includes('--runtime-version')) {
+  console.log(EKKO_RUNTIME_VERSION)
 } else {
   console.log(asset)
 }

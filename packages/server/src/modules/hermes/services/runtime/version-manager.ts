@@ -10,6 +10,12 @@ import { updateAgentStatus } from '../../../studio/public/agent-status-registry'
 import { discoverHermesCliInstallations, type HermesCliInstallation } from './discovery'
 import { detectHermesHome } from './path'
 import { cleanupRuntimePath, removeRuntimePath, renameRuntimePath } from './runtime-filesystem'
+import {
+  inspectRuntimeMaintenance,
+  type RuntimeMaintenanceCode,
+  type RuntimeMaintenanceResult,
+  type RuntimeMaintenanceStatus,
+} from './maintenance'
 
 const ACTIVE_VERSION_FILE = 'active-version.json'
 const DEFAULT_REMOTE_MANIFEST_URL = 'https://api.ekkostudio.xyz/api/studio/versions'
@@ -47,6 +53,8 @@ export interface InstalledRuntimeVersion {
   directory: string
   active: boolean
   manifestHermesRuntimeVersion?: string
+  maintenanceStatus: RuntimeMaintenanceStatus
+  maintenanceCode?: RuntimeMaintenanceCode
   validationError?: string
 }
 
@@ -123,8 +131,12 @@ export interface RuntimeVersionStatusOptions {
 
 interface RuntimePackageManifest {
   schema?: number
+  runtimeVersion?: string
   hermesAgentVersion?: string
   platform?: string
+  capabilities?: {
+    managedPython?: boolean
+  }
   hermesSource?: {
     repository?: string
     ref?: string
@@ -241,7 +253,7 @@ export function recordRuntimeSelectionResult(
     updatedAt: failedAt,
   }
   if (selected) {
-    next.hermesRuntimeVersion = selected.manifestHermesRuntimeVersion || selected.version
+    next.hermesRuntimeVersion = selected.version
     next.runtimeDirectory = selected.directory
     next.platform = selected.platform
   } else {
@@ -313,7 +325,11 @@ function missingRuntimeFiles(root: string): string[] {
     .map(files => files.map(file => relative(root, file)).join(' or '))
 }
 
-function validateRuntimeDirectory(root: string, expectedPlatform: string): void {
+function validateRuntimeDirectory(
+  root: string,
+  expectedPlatform: string,
+  expectedRuntimeVersion?: string,
+): RuntimeMaintenanceResult {
   const missing = missingRuntimeFiles(root)
   if (missing.length > 0) {
     throw new Error(
@@ -344,6 +360,22 @@ function validateRuntimeDirectory(root: string, expectedPlatform: string): void 
       throw new Error('Runtime archive has invalid Hermes Git source metadata')
     }
   }
+  const maintenance = inspectRuntimeMaintenance(root)
+  if ((manifest.schema || 0) >= 3) {
+    if (!manifest.runtimeVersion?.trim()) {
+      throw new Error('Runtime archive is missing runtimeVersion')
+    }
+    if (expectedRuntimeVersion && manifest.runtimeVersion !== expectedRuntimeVersion) {
+      throw new Error(`Runtime version mismatch: expected ${expectedRuntimeVersion}, received ${manifest.runtimeVersion}`)
+    }
+    if (manifest.capabilities?.managedPython !== true) {
+      throw new Error('Runtime archive does not declare managed Python support')
+    }
+    if (maintenance.status !== 'ready') {
+      throw new Error(`Runtime archive failed managed Python validation: ${maintenance.code || 'unknown'}`)
+    }
+  }
+  return maintenance
 }
 
 function scanInstalledRuntimeVersions(active = readActiveVersionManifest()): InstalledRuntimeVersion[] {
@@ -366,6 +398,7 @@ function scanInstalledRuntimeVersions(active = readActiveVersionManifest()): Ins
           directory,
           active: activeDir === resolve(directory),
           manifestHermesRuntimeVersion: readRuntimeManifestVersion(directory),
+          maintenanceStatus: 'unknown',
         })
       }
     }
@@ -379,6 +412,7 @@ function scanInstalledRuntimeVersions(active = readActiveVersionManifest()): Ins
       directory: activeDir,
       active: true,
       manifestHermesRuntimeVersion: manifestVersion,
+      maintenanceStatus: 'unknown',
     })
   }
 
@@ -404,8 +438,12 @@ export function listRuntimeVersionCandidates(active = readActiveVersionManifest(
       const recordedFailure = validationFailures.get(resolve(item.directory))
       if (recordedFailure) return { ...item, validationError: recordedFailure }
       try {
-        validateRuntimeDirectory(item.directory, item.platform)
-        return item
+        const maintenance = validateRuntimeDirectory(item.directory, item.platform, item.version)
+        return {
+          ...item,
+          maintenanceStatus: maintenance.status,
+          maintenanceCode: maintenance.code,
+        }
       } catch (error) {
         return {
           ...item,
@@ -646,6 +684,9 @@ export async function downloadRuntimeVersion(version: string, source: VersionDow
   const manifestUrl = downloadAssetUrl(manifestName, releaseTag, source)
   onProgress?.({ stage: 'resolve', message: 'runtimeVersions.jobStage.resolveRuntime' })
   const manifest = await fetchJson<RuntimePackageManifest>(manifestUrl)
+  if ((manifest.schema || 0) >= 3 && manifest.runtimeVersion !== cleanVersion) {
+    throw new Error(`Runtime manifest version mismatch: expected ${cleanVersion}, received ${manifest.runtimeVersion || 'missing'}`)
+  }
   const asset = manifest.asset
   if (!asset?.name) throw new Error(`Runtime manifest is missing asset.name: ${manifestUrl}`)
   const assetName = asset.name
@@ -655,6 +696,7 @@ export async function downloadRuntimeVersion(version: string, source: VersionDow
   const targetRoot = join(storageRoot, 'hermes', cleanVersion, platform)
   const archive = join(storageRoot, `${basename(assetName)}.download`)
   const tempRoot = join(storageRoot, `.runtime-download-${process.pid}-${Date.now()}`)
+  const previousRoot = join(storageRoot, `.runtime-previous-${process.pid}-${Date.now()}`)
 
   mkdirSync(storageRoot, { recursive: true })
   removeRuntimePath(tempRoot)
@@ -662,6 +704,7 @@ export async function downloadRuntimeVersion(version: string, source: VersionDow
 
   let archiveVerified = false
   let installSucceeded = false
+  let maintenance: RuntimeMaintenanceResult = { status: 'unknown' }
   try {
     if (asset.sha256 && existsSync(archive) && await sha256File(archive) === asset.sha256) {
       archiveVerified = true
@@ -677,16 +720,30 @@ export async function downloadRuntimeVersion(version: string, source: VersionDow
     }
     onProgress?.({ stage: 'extract', message: 'runtimeVersions.jobStage.extractRuntime' })
     await extractTarGzipArchive(archive, tempRoot)
-    validateRuntimeDirectory(tempRoot, platform)
+    maintenance = validateRuntimeDirectory(tempRoot, platform, cleanVersion)
     validateRuntimeAgentFiles(tempRoot)
     onProgress?.({ stage: 'install', message: 'runtimeVersions.jobStage.installRuntime' })
-    removeRuntimePath(targetRoot)
     mkdirSync(dirname(targetRoot), { recursive: true })
-    await renameRuntimePath(tempRoot, targetRoot)
+    removeRuntimePath(previousRoot)
+    const replacingExisting = existsSync(targetRoot)
+    if (replacingExisting) await renameRuntimePath(targetRoot, previousRoot)
+    try {
+      await renameRuntimePath(tempRoot, targetRoot)
+    } catch (error) {
+      if (replacingExisting && existsSync(previousRoot) && !existsSync(targetRoot)) {
+        await renameRuntimePath(previousRoot, targetRoot)
+      }
+      throw error
+    }
+    cleanupRuntimePath(previousRoot)
     installSucceeded = true
   } finally {
     if (!archiveVerified || installSucceeded) cleanupRuntimePath(archive)
     cleanupRuntimePath(tempRoot)
+    if (existsSync(previousRoot) && !existsSync(targetRoot)) {
+      await renameRuntimePath(previousRoot, targetRoot)
+    }
+    cleanupRuntimePath(previousRoot)
   }
 
   return {
@@ -695,6 +752,8 @@ export async function downloadRuntimeVersion(version: string, source: VersionDow
     directory: targetRoot,
     active: false,
     manifestHermesRuntimeVersion: manifest.hermesAgentVersion || cleanVersion,
+    maintenanceStatus: maintenance.status,
+    maintenanceCode: maintenance.code,
   }
 }
 
@@ -752,7 +811,7 @@ export function activateInstalledRuntimeVersion(version: string): ActiveVersionM
   const target = installed.find(item => item.version === cleanVersion && item.platform === runtimePlatformKey())
   if (!target) throw new Error(`Installed runtime version not found for this platform: ${cleanVersion}`)
   try {
-    validateRuntimeDirectory(target.directory, target.platform)
+    validateRuntimeDirectory(target.directory, target.platform, target.version)
     validateRuntimeAgentFiles(target.directory)
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err)
@@ -762,7 +821,7 @@ export function activateInstalledRuntimeVersion(version: string): ActiveVersionM
   const next: ActiveVersionManifest = {
     schema: 1,
     desktopAppVersion: active?.desktopAppVersion || undefined,
-    hermesRuntimeVersion: target.manifestHermesRuntimeVersion || target.version,
+    hermesRuntimeVersion: target.version,
     webUiVersion: active?.webUiVersion || undefined,
     runtimeDirectory: target.directory,
     runtimeRootDirectory: active?.runtimeRootDirectory || '',

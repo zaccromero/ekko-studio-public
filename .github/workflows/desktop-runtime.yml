@@ -4,10 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Runtime release tag to create or attach assets to (e.g. hermes-0.20.0-runtime)"
+        description: "New immutable Runtime release tag (for example hermes-0.23.0-ekko.1-runtime)"
         required: true
       hermes_version:
         description: "Hermes Agent version to package (defaults to repository runtime config)"
+        required: false
+        type: string
+      runtime_version:
+        description: "Immutable Ekko Runtime revision (for example 0.23.0-ekko.1; defaults to Hermes version)"
         required: false
         type: string
       hermes_source_ref:
@@ -19,36 +23,66 @@ on:
         required: false
         type: string
       python_version:
-        description: "Bundled Python version override (e.g. 3.14.7 for Hermes 0.22.2)"
+        description: "Bundled Python version override (defaults to the repository's supported Hermes runtime pin)"
         required: false
         type: string
       python_build_tag:
-        description: "python-build-standalone release tag for the Python override (e.g. 20260901)"
+        description: "python-build-standalone release tag paired with the Python override"
         required: false
         type: string
-      rebuild:
-        description: "Rebuild and replace existing runtime assets after validation"
-        required: false
-        type: boolean
-        default: false
 
 permissions:
   contents: write
 
 concurrency:
-  group: desktop-runtime-${{ github.event.release.tag_name || github.event.inputs.tag || github.ref }}
+  group: desktop-runtime-${{ github.event.inputs.tag || github.ref }}
   cancel-in-progress: false
 
 jobs:
+  validate:
+    name: Validate immutable release
+    runs-on: ubuntu-22.04
+    outputs:
+      runtime_version: ${{ steps.release.outputs.runtime_version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate release identity
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag }}
+          HERMES_VERSION: ${{ github.event.inputs.hermes_version }}
+          EKKO_RUNTIME_VERSION: ${{ github.event.inputs.runtime_version }}
+        run: |
+          runtime_version="$(node packages/desktop/scripts/runtime-asset-name.mjs --runtime-version)"
+          expected_tag="hermes-${runtime_version}-runtime"
+          if [ "$TAG" != "$expected_tag" ]; then
+            echo "Runtime tag must be $expected_tag, received $TAG" >&2
+            exit 1
+          fi
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Refusing to overwrite existing Runtime release $TAG" >&2
+            exit 1
+          fi
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" >/dev/null 2>&1; then
+            echo "Refusing to reuse existing Runtime tag $TAG" >&2
+            exit 1
+          fi
+          echo "runtime_version=$runtime_version" >> "$GITHUB_OUTPUT"
+
   runtime:
     name: Runtime (${{ matrix.label }})
+    needs: validate
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - label: macOS arm64
-            runner: macos-14
+            runner: macos-15
             target_os: darwin
             target_arch: arm64
           - label: macOS x64
@@ -79,8 +113,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.ref }}
 
       - name: Resolve runtime asset names
         id: names
@@ -89,37 +121,12 @@ jobs:
           TARGET_OS: ${{ matrix.target_os }}
           TARGET_ARCH: ${{ matrix.target_arch }}
           HERMES_VERSION: ${{ github.event.inputs.hermes_version }}
+          EKKO_RUNTIME_VERSION: ${{ needs.validate.outputs.runtime_version }}
         run: |
           echo "asset=$(node packages/desktop/scripts/runtime-asset-name.mjs)" >> "$GITHUB_OUTPUT"
           echo "manifest=$(node packages/desktop/scripts/runtime-asset-name.mjs --manifest)" >> "$GITHUB_OUTPUT"
 
-      - name: Check existing release assets
-        id: check
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event.release.tag_name || github.event.inputs.tag }}
-          ASSET: ${{ steps.names.outputs.asset }}
-          MANIFEST: ${{ steps.names.outputs.manifest }}
-          REBUILD: ${{ inputs.rebuild }}
-        run: |
-          if [ "$REBUILD" = "true" ]; then
-            echo "missing=true" >> "$GITHUB_OUTPUT"
-            echo "Rebuilding runtime asset: $ASSET"
-            exit 0
-          fi
-          assets="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' || true)"
-          if printf '%s\n' "$assets" | grep -Fx "$ASSET" >/dev/null \
-            && printf '%s\n' "$assets" | grep -Fx "$MANIFEST" >/dev/null; then
-            echo "missing=false" >> "$GITHUB_OUTPUT"
-            echo "Runtime asset already exists: $ASSET"
-          else
-            echo "missing=true" >> "$GITHUB_OUTPUT"
-            echo "Runtime asset missing: $ASSET or $MANIFEST"
-          fi
-
       - name: Setup Node.js
-        if: steps.check.outputs.missing == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: '24.22.1'
@@ -127,25 +134,23 @@ jobs:
           cache-dependency-path: packages/desktop/package-lock.json
 
       - name: Install uv
-        if: steps.check.outputs.missing == 'true'
         uses: astral-sh/setup-uv@v3
 
       - name: Install desktop dependencies
-        if: steps.check.outputs.missing == 'true'
         run: npm ci --prefix packages/desktop --no-audit --no-fund
 
       - name: Prepare native ARM64 OpenSSL
-        if: steps.check.outputs.missing == 'true' && matrix.target_os == 'win32' && matrix.target_arch == 'arm64'
+        if: matrix.target_os == 'win32' && matrix.target_arch == 'arm64'
         shell: pwsh
         run: ./packages/desktop/scripts/setup-windows-arm64-openssl.ps1
 
       - name: Prepare runtime resources
-        if: steps.check.outputs.missing == 'true'
         env:
           TARGET_OS: ${{ matrix.target_os }}
           TARGET_ARCH: ${{ matrix.target_arch }}
           GH_TOKEN: ${{ github.token }}
           HERMES_VERSION: ${{ github.event.inputs.hermes_version }}
+          EKKO_RUNTIME_VERSION: ${{ needs.validate.outputs.runtime_version }}
           HERMES_SOURCE_REF: ${{ github.event.inputs.hermes_source_ref }}
           HERMES_SOURCE_COMMIT: ${{ github.event.inputs.hermes_source_commit }}
           HERMES_SKIP_BROWSER_RUNTIME: ${{ matrix.skip_browser_runtime || 'false' }}
@@ -153,24 +158,80 @@ jobs:
           PBS_TAG: ${{ github.event.inputs.python_build_tag }}
         run: npm --prefix packages/desktop run prepare:runtime
 
-      - name: Package runtime
-        if: steps.check.outputs.missing == 'true'
+      - name: Package and validate runtime
         env:
           TARGET_OS: ${{ matrix.target_os }}
           TARGET_ARCH: ${{ matrix.target_arch }}
           HERMES_VERSION: ${{ github.event.inputs.hermes_version }}
+          EKKO_RUNTIME_VERSION: ${{ needs.validate.outputs.runtime_version }}
           HERMES_SOURCE_REF: ${{ github.event.inputs.hermes_source_ref }}
           HERMES_SOURCE_COMMIT: ${{ github.event.inputs.hermes_source_commit }}
         run: npm --prefix packages/desktop run package:runtime
 
-      - name: Upload runtime assets to release
-        if: steps.check.outputs.missing == 'true'
-        uses: softprops/action-gh-release@v2
+      - name: Stage validated runtime assets
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: ${{ github.event.release.tag_name || github.event.inputs.tag }}
-          make_latest: "false"
-          fail_on_unmatched_files: true
-          files: |
+          name: desktop-runtime-${{ matrix.target_os }}-${{ matrix.target_arch }}
+          if-no-files-found: error
+          retention-days: 3
+          path: |
             packages/desktop/release/runtime/${{ steps.names.outputs.asset }}
             packages/desktop/release/runtime/${{ steps.names.outputs.asset }}.sha256
             packages/desktop/release/runtime/${{ steps.names.outputs.manifest }}
+
+  publish:
+    name: Publish complete Runtime matrix
+    needs: [validate, runtime]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Download validated runtime matrix
+        uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-runtime-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Verify complete schema 3 matrix
+        shell: bash
+        env:
+          EKKO_RUNTIME_VERSION: ${{ needs.validate.outputs.runtime_version }}
+        run: |
+          file_count="$(find release-assets -maxdepth 1 -type f | wc -l | tr -d ' ')"
+          if [ "$file_count" != "18" ]; then
+            echo "Expected 18 Runtime release files, found $file_count" >&2
+            exit 1
+          fi
+          node -e '
+            const fs = require("node:fs");
+            const path = require("node:path");
+            const root = "release-assets";
+            const manifests = fs.readdirSync(root).filter(name => /^hermes-runtime-(mac|win|linux)-(x64|arm64)\.json$/.test(name));
+            if (manifests.length !== 6) throw new Error(`expected 6 manifests, found ${manifests.length}`);
+            for (const name of manifests) {
+              const manifest = JSON.parse(fs.readFileSync(path.join(root, name), "utf8"));
+              if (manifest.schema !== 3) throw new Error(`${name}: expected schema 3`);
+              if (manifest.runtimeVersion !== process.env.EKKO_RUNTIME_VERSION) throw new Error(`${name}: Runtime revision mismatch`);
+              if (manifest.capabilities?.managedPython !== true) throw new Error(`${name}: managed Python capability missing`);
+              if (!/^[0-9a-f]{64}$/.test(manifest.asset?.sha256 || "")) throw new Error(`${name}: SHA-256 missing`);
+            }
+          '
+
+      - name: Publish immutable Runtime release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag }}
+        run: |
+          created=false
+          published=false
+          cleanup() {
+            if [ "$created" = "true" ] && [ "$published" != "true" ]; then
+              gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes || true
+            fi
+          }
+          trap cleanup EXIT
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --draft --title "$TAG"
+          created=true
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" release-assets/*
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
+          published=true

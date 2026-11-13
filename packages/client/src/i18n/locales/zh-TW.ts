@@ -823,6 +823,13 @@ export default {
     runtimeMigrationPending: '待遷移至：{directory}',
     runtimeMigrationFailed: '儲存目錄遷移失敗，已繼續使用原目錄',
     runtimeActivationFailed: '所選 Runtime 無法啟動，Ekko Studio 已改用其他已安裝版本',
+    maintenanceDegraded: '此 Runtime 可以執行 Agent，但受管理的維護 Python 不完整。更新 Hermes 前請安裝修正版。',
+    maintenanceRequired: '需要維護',
+    maintenanceCode: {
+      'managed-python-missing': '缺少受管理的 Python',
+      'payload-manifest-invalid': '套件中繼資料無效',
+      'managed-python-dangling': '受管理的 Python 無法使用',
+    },
     active: '已啟用',
     installed: '已安裝',
     download: '下載',

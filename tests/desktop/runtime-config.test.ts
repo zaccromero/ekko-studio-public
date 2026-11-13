@@ -5,13 +5,15 @@ import {
   DEFAULT_HERMES_SOURCE_REPOSITORY,
   DEFAULT_HERMES_VERSION,
   hermesSource,
+  runtimeReleaseTag,
+  runtimeVersion,
 } from '../../packages/desktop/scripts/runtime-config.mjs'
 
 describe('desktop Hermes source configuration', () => {
   it('pins an immutable upstream release by default', () => {
-    expect(DEFAULT_HERMES_VERSION).toBe('0.20.6')
-    expect(DEFAULT_HERMES_SOURCE_REF).toBe('v2026.8.27')
-    expect(DEFAULT_HERMES_SOURCE_COMMIT).toBe('5fc308a70719a83cccdbba4c0e39c23f5a8239d5')
+    expect(DEFAULT_HERMES_VERSION).toBe('0.23.0')
+    expect(DEFAULT_HERMES_SOURCE_REF).toBe('v0.23.0')
+    expect(DEFAULT_HERMES_SOURCE_COMMIT).toBe('2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19')
     expect(hermesSource({})).toEqual({
       version: DEFAULT_HERMES_VERSION,
       repository: DEFAULT_HERMES_SOURCE_REPOSITORY,
@@ -19,6 +21,19 @@ describe('desktop Hermes source configuration', () => {
       commit: DEFAULT_HERMES_SOURCE_COMMIT,
     })
     expect(DEFAULT_HERMES_SOURCE_COMMIT).toMatch(/^[0-9a-f]{40}$/)
+  })
+
+  it('versions the Ekko runtime independently from the embedded Hermes release', () => {
+    expect(runtimeVersion({ HERMES_VERSION: '0.23.0' })).toBe('0.23.0')
+    expect(runtimeVersion({
+      HERMES_VERSION: '0.23.0',
+      EKKO_RUNTIME_VERSION: '0.23.0-ekko.1',
+    })).toBe('0.23.0-ekko.1')
+    expect(runtimeReleaseTag({
+      HERMES_VERSION: '0.23.0',
+      EKKO_RUNTIME_VERSION: '0.23.0-ekko.1',
+    })).toBe('hermes-0.23.0-ekko.1-runtime')
+    expect(() => runtimeVersion({ EKKO_RUNTIME_VERSION: '../escape' })).toThrow(/release identifier/)
   })
 
   it('rejects a partial release override', () => {

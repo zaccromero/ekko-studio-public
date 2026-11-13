@@ -5,6 +5,7 @@ import {
   bundledBasePythonPath,
   configWithPythonHome,
   makeBundledBaseConfigPortable,
+  venvHermesBuildPath,
   venvPythonPath,
 } from '../../packages/desktop/scripts/python-runtime-layout.mjs'
 
@@ -16,12 +17,20 @@ describe('desktop Python runtime layout', () => {
     expect(venvPythonPath(venv, 'win32')).toBe(
       join(venv, 'Scripts', 'python.exe'),
     )
+    expect(venvHermesBuildPath(venv, 'win32')).toBe(
+      join(venv, 'Scripts', 'hermes.exe'),
+    )
     expect(bundledBasePythonPath(pythonRoot, 'win32')).toBe(
       join(pythonRoot, 'base', 'python.exe'),
     )
     expect(bundledBaseHomePath(pythonRoot, 'win32')).toBe(
       join(pythonRoot, 'base'),
     )
+  })
+
+  it('uses the installed POSIX Hermes entry point during runtime construction', () => {
+    const venv = join('/runtime', 'python', 'venv')
+    expect(venvHermesBuildPath(venv, 'linux')).toBe(join(venv, 'bin', 'hermes'))
   })
 
   it('writes the absolute embedded Python home required by Windows', () => {

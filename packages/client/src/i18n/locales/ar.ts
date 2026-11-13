@@ -823,6 +823,13 @@ export default {
     runtimeMigrationPending: 'وجهة النقل المعلّقة: {directory}',
     runtimeMigrationFailed: 'فشل نقل التخزين، وما زال التخزين السابق نشطًا',
     runtimeActivationFailed: 'تعذر تشغيل Runtime المحدد، لذلك استخدم Ekko Studio إصدارًا آخر مثبتًا',
+    maintenanceDegraded: 'يمكن لبيئة التشغيل هذه تشغيل الوكلاء، لكن Python المُدار للصيانة غير مكتمل. ثبّت مراجعة مصححة قبل تحديث Hermes.',
+    maintenanceRequired: 'الصيانة مطلوبة',
+    maintenanceCode: {
+      'managed-python-missing': 'Python المُدار مفقود',
+      'payload-manifest-invalid': 'بيانات الحزمة الوصفية غير صالحة',
+      'managed-python-dangling': 'Python المُدار غير متاح',
+    },
     active: 'نشط',
     installed: 'مثبّت',
     download: 'تنزيل',
