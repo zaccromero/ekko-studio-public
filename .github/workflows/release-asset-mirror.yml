@@ -1,0 +1,72 @@
+name: Temporary runtime asset mirror
+
+on:
+  workflow_dispatch:
+    inputs:
+      asset_name:
+        description: Release asset file name
+        required: true
+        type: string
+      expected_size:
+        description: Expected byte size
+        required: true
+        type: string
+      expected_sha256:
+        description: Expected SHA-256
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Validate inputs
+        shell: bash
+        env:
+          ASSET_NAME: ${{ inputs.asset_name }}
+          EXPECTED_SIZE: ${{ inputs.expected_size }}
+          EXPECTED_SHA256: ${{ inputs.expected_sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$ASSET_NAME" =~ ^[A-Za-z0-9._-]+$ ]]
+          [[ "$EXPECTED_SIZE" =~ ^[0-9]+$ ]]
+          [[ "$EXPECTED_SHA256" =~ ^[a-f0-9]{64}$ ]]
+
+      - name: Download and verify source asset
+        shell: bash
+        env:
+          SOURCE_ASSET_URL: ${{ secrets.SOURCE_ASSET_URL }}
+          EXPECTED_SIZE: ${{ inputs.expected_size }}
+          EXPECTED_SHA256: ${{ inputs.expected_sha256 }}
+        run: |
+          set -euo pipefail
+          test -n "$SOURCE_ASSET_URL"
+          curl --fail --location --retry 5 --retry-all-errors --output runtime-asset "$SOURCE_ASSET_URL"
+          actual_size="$(stat -c %s runtime-asset)"
+          test "$actual_size" = "$EXPECTED_SIZE"
+          printf '%s  %s\n' "$EXPECTED_SHA256" runtime-asset | sha256sum --check -
+
+      - name: Upload verified asset to draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ASSET_NAME: ${{ inputs.asset_name }}
+          EXPECTED_SIZE: ${{ inputs.expected_size }}
+          EXPECTED_SHA256: ${{ inputs.expected_sha256 }}
+        run: |
+          set -euo pipefail
+          gh api --method POST \
+            -H 'Content-Type: application/octet-stream' \
+            --input runtime-asset \
+            "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/444256402/assets?name=$ASSET_NAME" \
+            > upload.json
+          jq --exit-status \
+            --arg n "$ASSET_NAME" \
+            --argjson s "$EXPECTED_SIZE" \
+            --arg d "sha256:$EXPECTED_SHA256" \
+            '.name == $n and .size == $s and .digest == $d and .state == "uploaded"' \
+            upload.json
